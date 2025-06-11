@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Q&A Generator</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        body {
+            background-color: #f8f9fa;
+            min-height: 100vh;
+        }
+        .main-container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+        }
+        .drop-zone {
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background-color: #f8f9fa;
+        }
+        .drop-zone:hover {
+            border-color: #0d6efd;
+            background-color: #e9ecef;
+        }
+        .drop-zone.dragover {
+            border-color: #0d6efd;
+            background-color: #e9ecef;
+        }
+        .question-card {
+            background: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            transition: transform 0.2s ease;
+        }
+        .question-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .question-text {
+            color: #0d6efd;
+            font-weight: 500;
+            margin-bottom: 1rem;
+        }
+        .answer-text {
+            color: #495057;
+            line-height: 1.6;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+        }
+        .loading i {
+            font-size: 2rem;
+            color: #0d6efd;
+        }
+        .section-title {
+            color: #212529;
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+        }
+        .btn-icon {
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+        }
+        .btn-icon i {
+            font-size: 0.875rem;
+        }
+        .toast {
+            background: white;
+            border: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .toast-header {
+            border-bottom: none;
+        }
+        .toast-body {
+            padding: 0.75rem 1rem;
+        }
+        .document-preview {
+            background: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .accordion-button:not(.collapsed) {
+            background-color: #e7f1ff;
+            color: #0d6efd;
+        }
+        .accordion-button:focus {
+            box-shadow: none;
+            border-color: rgba(0,0,0,.125);
+        }
+        .document-content {
+            white-space: pre-wrap;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #495057;
+        }
+        .nav-tabs .nav-link {
+            color: #6c757d;
+        }
+        .nav-tabs .nav-link.active {
+            color: #0d6efd;
+            font-weight: 500;
+        }
+        #pdfViewer {
+            width: 100%;
+            height: 800px;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+        }
+        .pdf-controls {
+            margin-bottom: 1rem;
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .pdf-controls button {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.875rem;
+        }
+        .pdf-controls input {
+            width: 60px;
+            text-align: center;
+        }
+        .document-type-indicator {
+            margin-bottom: 1rem;
+            padding: 0.5rem;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container main-container">
+        <h1 class="text-center mb-4">Question-Answer Generator</h1>
+        <p class="text-center text-muted mb-4">Your patience is the key to success - Processing may take a few moments</p>
+        
+        <!-- Main Content -->
+        <div class="row">
+            <div class="col-12">
+                <!-- File Upload -->
+                <div class="drop-zone mb-4" id="dropZone" onclick="document.getElementById('fileInput').click()">
+                    <input type="file" id="fileInput" style="display: none" accept=".pdf,.docx,.pptx" onchange="handleFileSelect(event)">
+                    <i class="fas fa-cloud-upload-alt fa-3x mb-3 text-primary"></i>
+                    <h4>Drag & Drop your document here</h4>
+                    <p class="text-muted">or click to browse</p>
+                    <p class="text-muted small">Supported formats: PDF, Word, PowerPoint</p>
+                </div>
+
+                <!-- Loading Indicator -->
+                <div class="loading" id="loading">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <p class="mt-2">Processing your document...</p>
+                </div>
+
+                <!-- Results Section -->
+                <div id="results" style="display: none">
+                    <!-- Navigation Tabs -->
+                    <ul class="nav nav-tabs mb-4" id="resultTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="qa-tab" data-bs-toggle="tab" data-bs-target="#qa-content" type="button" role="tab">
+                                <i class="fas fa-question-circle me-2"></i>Questions & Answers
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="document-tab" data-bs-toggle="tab" data-bs-target="#document-content" type="button" role="tab">
+                                <i class="fas fa-file-alt me-2"></i>Document Content
+                            </button>
+                        </li>
+                    </ul>
+
+                    <!-- Tab Content -->
+                    <div class="tab-content" id="resultTabsContent">
+                        <!-- Q&A Tab -->
+                        <div class="tab-pane fade show active" id="qa-content" role="tabpanel">
+                            <h3 class="section-title">Top 10 Questions and Answers</h3>
+                            <div id="qaList"></div>
+                            <div class="text-center mt-4">
+                                <a id="downloadLink" href="#" class="btn btn-primary">
+                                    <i class="fas fa-download me-2"></i>Download Full Q&A (CSV)
+                                </a>
+                            </div>
+                        </div>
+
+                        <!-- Document Content Tab -->
+                        <div class="tab-pane fade" id="document-content" role="tabpanel">
+                            <h3 class="section-title">Document Content</h3>
+                            <div class="document-preview">
+                                <!-- Document Type Indicator -->
+                                <div class="document-type-indicator" id="docTypeIndicator">
+                                    <i class="fas fa-file-alt"></i>
+                                    <span id="docTypeText">Loading document...</span>
+                                </div>
+
+                                <!-- PDF Viewer -->
+                                <div id="pdfViewerContainer" style="display: none;">
+                                    <div class="pdf-controls">
+                                        <button class="btn btn-outline-primary" onclick="prevPage()">
+                                            <i class="fas fa-chevron-left"></i>
+                                        </button>
+                                        <span>Page</span>
+                                        <input type="number" id="pageNumber" min="1" value="1" onchange="goToPage(this.value)">
+                                        <span>of</span>
+                                        <span id="pageCount">0</span>
+                                        <button class="btn btn-outline-primary" onclick="nextPage()">
+                                            <i class="fas fa-chevron-right"></i>
+                                        </button>
+                                        <button class="btn btn-outline-primary" onclick="zoomIn()">
+                                            <i class="fas fa-search-plus"></i>
+                                        </button>
+                                        <button class="btn btn-outline-primary" onclick="zoomOut()">
+                                            <i class="fas fa-search-minus"></i>
+                                        </button>
+                                    </div>
+                                    <canvas id="pdfViewer"></canvas>
+                                </div>
+
+                                <!-- Text Content Viewer -->
+                                <div id="textContentViewer" style="display: none;">
+                                    <div class="accordion" id="documentAccordion">
+                                        <!-- Document sections will be added here dynamically -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Initialize PDF.js
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        
+        let currentPdfDoc = null;
+        let currentPage = 1;
+        let currentScale = 1.0;
+        let currentFileType = '';
+
+        // File Upload Handling
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight(e) {
+            dropZone.classList.add('dragover');
+        }
+
+        function unhighlight(e) {
+            dropZone.classList.remove('dragover');
+        }
+
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+
+        function handleFileSelect(e) {
+            const files = e.target.files;
+            handleFiles(files);
+        }
+
+        function handleFiles(files) {
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.type === 'application/pdf' || 
+                    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                    file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+                    uploadFile(file);
+                } else {
+                    alert('Please upload a PDF, Word, or PowerPoint file.');
+                }
+            }
+        }
+
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('results').style.display = 'none';
+
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Upload failed');
+                }
+
+                const result = await response.json();
+                if (result.success) {
+                    currentFileType = file.type;
+                    await analyzeDocument(result.file_path);
+                } else {
+                    throw new Error(result.error || 'Upload failed');
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+                alert('Error uploading file: ' + error.message);
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        async function analyzeDocument(filePath) {
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `file_path=${encodeURIComponent(filePath)}`
+                });
+
+                if (!response.ok) {
+                    throw new Error('Analysis failed');
+                }
+
+                const result = await response.json();
+                if (result.success) {
+                    displayResults(result.qa_list, result.csv_path, result.document_content, filePath);
+                } else {
+                    throw new Error(result.error || 'Analysis failed');
+                }
+            } catch (error) {
+                console.error('Analysis error:', error);
+                alert('Error analyzing document: ' + error.message);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        function displayResults(qaList, csvPath, documentContent, filePath) {
+            const resultsDiv = document.getElementById('results');
+            const qaListDiv = document.getElementById('qaList');
+            const downloadLink = document.getElementById('downloadLink');
+            const documentAccordion = document.getElementById('documentAccordion');
+            const pdfViewerContainer = document.getElementById('pdfViewerContainer');
+            const textContentViewer = document.getElementById('textContentViewer');
+            const docTypeIndicator = document.getElementById('docTypeIndicator');
+            const docTypeText = document.getElementById('docTypeText');
+
+            // Display Q&A
+            qaListDiv.innerHTML = '';
+            qaList.forEach(qa => {
+                const card = document.createElement('div');
+                card.className = 'question-card';
+                card.innerHTML = `
+                    <div class="question-text">${qa.question}</div>
+                    <div class="answer-text">${qa.answer}</div>
+                `;
+                qaListDiv.appendChild(card);
+            });
+
+            // Set document type indicator
+            if (currentFileType === 'application/pdf') {
+                docTypeText.innerHTML = '<i class="fas fa-file-pdf"></i> PDF Document';
+                pdfViewerContainer.style.display = 'block';
+                textContentViewer.style.display = 'none';
+                loadPDF(filePath);
+            } else {
+                docTypeText.innerHTML = '<i class="fas fa-file-alt"></i> Text Document';
+                pdfViewerContainer.style.display = 'none';
+                textContentViewer.style.display = 'block';
+                
+                // Display document content
+                documentAccordion.innerHTML = '';
+                if (documentContent && documentContent.length > 0) {
+                    documentContent.forEach((section, index) => {
+                        const accordionItem = document.createElement('div');
+                        accordionItem.className = 'accordion-item';
+                        accordionItem.innerHTML = `
+                            <h2 class="accordion-header" id="heading${index}">
+                                <button class="accordion-button ${index === 0 ? '' : 'collapsed'}" type="button" 
+                                        data-bs-toggle="collapse" data-bs-target="#collapse${index}">
+                                    Section ${index + 1}
+                                </button>
+                            </h2>
+                            <div id="collapse${index}" class="accordion-collapse collapse ${index === 0 ? 'show' : ''}" 
+                                 data-bs-parent="#documentAccordion">
+                                <div class="accordion-body">
+                                    <div class="document-content">${section}</div>
+                                </div>
+                            </div>
+                        `;
+                        documentAccordion.appendChild(accordionItem);
+                    });
+                } else {
+                    documentAccordion.innerHTML = '<p class="text-muted">No document content available.</p>';
+                }
+            }
+
+            downloadLink.href = csvPath;
+            resultsDiv.style.display = 'block';
+        }
+
+        // PDF Viewer Functions
+        async function loadPDF(filePath) {
+            try {
+                const loadingTask = pdfjsLib.getDocument(filePath);
+                currentPdfDoc = await loadingTask.promise;
+                document.getElementById('pageCount').textContent = currentPdfDoc.numPages;
+                renderPage(1);
+            } catch (error) {
+                console.error('Error loading PDF:', error);
+                alert('Error loading PDF document');
+            }
+        }
+
+        async function renderPage(pageNumber) {
+            try {
+                const page = await currentPdfDoc.getPage(pageNumber);
+                const canvas = document.getElementById('pdfViewer');
+                const context = canvas.getContext('2d');
+
+                const viewport = page.getViewport({ scale: currentScale });
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                const renderContext = {
+                    canvasContext: context,
+                    viewport: viewport
+                };
+
+                await page.render(renderContext).promise;
+                currentPage = pageNumber;
+                document.getElementById('pageNumber').value = pageNumber;
+            } catch (error) {
+                console.error('Error rendering page:', error);
+            }
+        }
+
+        function prevPage() {
+            if (currentPage > 1) {
+                renderPage(currentPage - 1);
+            }
+        }
+
+        function nextPage() {
+            if (currentPage < currentPdfDoc.numPages) {
+                renderPage(currentPage + 1);
+            }
+        }
+
+        function goToPage(pageNumber) {
+            const page = parseInt(pageNumber);
+            if (page >= 1 && page <= currentPdfDoc.numPages) {
+                renderPage(page);
+            }
+        }
+
+        function zoomIn() {
+            currentScale *= 1.2;
+            renderPage(currentPage);
+        }
+
+        function zoomOut() {
+            currentScale /= 1.2;
+            renderPage(currentPage);
+        }
+    </script>
+</body>
+</html>
