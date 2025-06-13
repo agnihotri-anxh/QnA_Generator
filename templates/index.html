@@ -159,6 +159,20 @@
         <h1 class="text-center mb-4">Question-Answer Generator</h1>
         <p class="text-center text-muted mb-4">Your patience is the key to success - Processing may take a few moments</p>
         
+        <!-- Toast Container -->
+        <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+            <div id="uploadToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+                <div class="toast-header">
+                    <i class="fas fa-check-circle text-success me-2"></i>
+                    <strong class="me-auto">Success</strong>
+                    <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>
+                <div class="toast-body">
+                    Document uploaded successfully!
+                </div>
+            </div>
+        </div>
+
         <!-- Main Content -->
         <div class="row">
             <div class="col-12">
@@ -337,6 +351,10 @@
 
                 const result = await response.json();
                 if (result.success) {
+                    // Show success toast
+                    const toast = new bootstrap.Toast(document.getElementById('uploadToast'));
+                    toast.show();
+                    
                     currentFileType = file.type;
                     await analyzeDocument(result.file_path);
                 } else {

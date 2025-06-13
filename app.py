@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
+from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import shutil
 import os
@@ -10,7 +11,6 @@ import logging
 import uvicorn
 from datetime import datetime
 from src.helper import file_processing, llm_pipeline
-from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging
 logging.basicConfig(
@@ -19,12 +19,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(
+    title="QA Generator",
+    description="An API for generating questions and answers from documents",
+    version="1.0.0"
+)
 
-# Add CORS middleware
+# Add CORS middleware with proper settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, replace with your frontend domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,11 +82,13 @@ async def upload_file(file: UploadFile = File(...)):
 async def analyze_document(file_path: str = Form(...)):
     try:
         # Process the document
+        logger.info(f"Starting document analysis for: {file_path}")
         processed_chunks = file_processing(file_path)
         if not processed_chunks:
             raise HTTPException(status_code=400, detail="No content could be extracted from the document")
         
         # Generate Q&A
+        logger.info("Starting Q&A generation")
         output_file, qa_list = llm_pipeline(processed_chunks, file_path)
         
         logger.info(f"Document analyzed successfully: {file_path}")
@@ -94,8 +100,9 @@ async def analyze_document(file_path: str = Form(...)):
         })
     
     except Exception as e:
-        logger.error(f"Error analyzing document: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = f"Error analyzing document: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
@@ -104,10 +111,16 @@ async def download_file(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
 
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run(
         "app:app",
-        host="127.0.0.1",
-        port=8000,
+        host="0.0.0.0",
+        port=port,
         reload=True
     )
