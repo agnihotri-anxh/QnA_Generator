@@ -26,8 +26,17 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-os.environ["GROQ_API_KEY"] = GROQ_API_KEY
-os.environ["HUGGINGFACE_API_KEY"] = HUGGINGFACE_API_KEY
+
+# Set environment variables only if they exist
+if GROQ_API_KEY:
+    os.environ["GROQ_API_KEY"] = GROQ_API_KEY
+else:
+    logger.warning("GROQ_API_KEY not found in environment variables")
+
+if HUGGINGFACE_API_KEY:
+    os.environ["HUGGINGFACE_API_KEY"] = HUGGINGFACE_API_KEY
+else:
+    logger.warning("HUGGINGFACE_API_KEY not found in environment variables")
 
 # Rate limiting settings
 RATE_LIMIT_DELAY = 0.5  # Reduced delay between API calls
