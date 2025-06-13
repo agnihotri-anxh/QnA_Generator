@@ -1,17 +1,17 @@
 --no-binary :all:
 setuptools==68.2.2
-wheel==0.41.3
+wheel==0.41.2
 --only-binary :all:
 langchain==0.0.350
 python-dotenv==1.0.0
 fastapi==0.104.1
 uvicorn==0.24.0
 python-multipart==0.0.6
-sentence-transformers==2.2.2
+sentence-transformers==4.1.0
 faiss-cpu==1.11.0
-numpy==2.2.6
-torch==2.7.1
-transformers>=4.30.0
+numpy>=1.21.0,<2.0.0
+torch>=2.0.0,<3.0.0
+transformers>=4.30.0,<5.0.0
 groq==0.4.2
 unstructured==0.10.30
 python-docx==0.8.11
