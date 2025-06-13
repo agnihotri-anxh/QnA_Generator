@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
+os.environ["HUGGINGFACE_API_KEY"] = HUGGINGFACE_API_KEY
 
 # Rate limiting settings
 RATE_LIMIT_DELAY = 0.5  # Reduced delay between API calls
@@ -129,6 +131,21 @@ def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, 
                 return ""
             logger.warning(f"Attempt {attempt + 1} failed, retrying... Error: {str(e)}")
             time.sleep(RATE_LIMIT_DELAY * (attempt + 1))
+
+def create_embeddings():
+    """Create embeddings with proper error handling."""
+    try:
+        logger.info("Creating embeddings...")
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+        logger.info("Embeddings created successfully")
+        return embeddings
+    except Exception as e:
+        logger.error(f"Failed to create embeddings: {str(e)}")
+        raise Exception(f"Failed to create embeddings: {str(e)}")
 
 def file_processing(file_path):
     try:
@@ -275,12 +292,7 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
             raise Exception(f"Failed to initialize answer LLM: {str(e)}")
 
         try:
-            logger.info("Creating embeddings...")
-            embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={'device': 'cpu'}
-            )
-            logger.info("Embeddings created successfully")
+            embeddings = create_embeddings()
         except Exception as e:
             logger.error(f"Failed to create embeddings: {str(e)}")
             raise Exception(f"Failed to create embeddings: {str(e)}")
