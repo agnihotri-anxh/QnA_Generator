@@ -7,12 +7,12 @@ python-dotenv==1.0.0
 fastapi==0.104.1
 uvicorn==0.24.0
 python-multipart==0.0.6
-sentence-transformers==4.1.0
+sentence-transformers==2.2.2
 faiss-cpu==1.11.0
 numpy==2.2.6
-torch==2.0.1
-transformers==4.30.2
-langchain-groq==0.0.1
+torch==2.7.1
+transformers>=4.30.0
+groq==0.4.2
 unstructured==0.10.30
 python-docx==0.8.11
 python-pptx==0.6.21
