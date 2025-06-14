@@ -462,13 +462,18 @@
         // PDF Viewer Functions
         async function loadPDF(filePath) {
             try {
-                const loadingTask = pdfjsLib.getDocument(filePath);
+                // Convert file path to URL
+                const fileName = filePath.split('/').pop();
+                const pdfUrl = `/static/docs/${fileName}`;
+                
+                const loadingTask = pdfjsLib.getDocument(pdfUrl);
                 currentPdfDoc = await loadingTask.promise;
                 document.getElementById('pageCount').textContent = currentPdfDoc.numPages;
                 renderPage(1);
             } catch (error) {
                 console.error('Error loading PDF:', error);
-                alert('Error loading PDF document');
+                // Don't show alert, just log the error
+                console.log('Error loading PDF document');
             }
         }
 
