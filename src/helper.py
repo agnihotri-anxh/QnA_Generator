@@ -19,18 +19,28 @@ import re
 import time
 from itertools import chain
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging with more detailed format
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('helper.log')
+    ]
+)
 logger = logging.getLogger(__name__)
 
+# Load environment variables
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY environment variable is not set")
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 # Rate limiting settings
-RATE_LIMIT_DELAY = 0.5  # Reduced delay between API calls
+RATE_LIMIT_DELAY = 1.0  # Increased delay for better stability
 MAX_RETRIES = 3
-BATCH_SIZE = 5  # Process questions in batches
+BATCH_SIZE = 3  # Reduced batch size for better stability
 
 def get_document_loader(file_path):
     logger.info(f"Getting document loader for file: {file_path}")
@@ -54,15 +64,23 @@ def get_document_loader(file_path):
 
 def clean_text(text: str) -> str:
     """Clean and normalize text for better processing."""
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'[^\w\s.,!?-]', '', text)
-    return text.strip()
+    try:
+        if not text:
+            return ""
+        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'[^\w\s.,!?-]', '', text)
+        return text.strip()
+    except Exception as e:
+        logger.error(f"Error in clean_text: {str(e)}")
+        return ""
 
 def process_batch(questions: List[str], answer_chain: RetrievalQA) -> List[dict]:
     """Process a batch of questions together."""
     results = []
     for question in questions:
         try:
+            if not question.strip():
+                continue
             answer = answer_chain.run(question)
             results.append({
                 "question": question,
@@ -165,9 +183,9 @@ def file_processing(file_path):
         if not question_gen.strip():
             raise ValueError("No text content after cleaning")
             
-        # Use larger chunks for faster processing
+        # Use smaller chunks for better processing
         splitter = CharacterTextSplitter(
-            chunk_size=4000,
+            chunk_size=2000,  # Reduced chunk size
             chunk_overlap=200,
             separator="\n"
         )
@@ -194,11 +212,12 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
             llm = ChatGroq(
                 groq_api_key=os.getenv("GROQ_API_KEY"),
                 model_name="gemma2-9b-it",
-                temperature=0.7
+                temperature=0.7,
+                max_tokens=1000  # Added max tokens limit
             )
             logger.info("LLM initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize LLM: {str(e)}")
+            logger.error(f"Error initializing LLM: {str(e)}")
             raise Exception(f"Failed to initialize LLM: {str(e)}")
 
         # Create prompt template
@@ -325,4 +344,4 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
 
     except Exception as e:
         logger.error(f"Error in LLM pipeline: {str(e)}")
-        raise Exception(f"Document analysis failed: {str(e)}")
+        raise Exception(f"LLM pipeline failed: {str(e)}")
