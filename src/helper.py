@@ -78,13 +78,19 @@ def process_batch(batch, llm, document_content=None):
     results = []
     for question in batch:
         try:
-            # Create a prompt for the question
-            prompt = f"""You are an expert in document analysis. Use the following document content to answer the question. If the answer is not in the content, say "The answer is not available in the provided document content."
+            # Create a more detailed prompt for the question
+            prompt = f"""You are an expert document analyzer. Your task is to answer questions based on the provided document content.
 
 Document Content:
 {document_content if document_content else "No document content provided."}
 
 Question: {question}
+
+Instructions:
+1. If the answer is in the document content, provide a clear and concise answer.
+2. If the answer is not in the document content, respond with "The answer is not available in the provided document content."
+3. If the document content is empty or not provided, respond with "No document content was provided to answer this question."
+4. Do not make up or infer answers that are not explicitly stated in the document content.
 
 Answer:"""
             
@@ -92,15 +98,23 @@ Answer:"""
             response = llm.invoke(prompt)
             answer = response.content.strip()
             
+            # Validate the answer
+            if not answer or answer.isspace():
+                answer = "The answer is not available in the provided document content."
+            
             results.append({
                 "question": question,
                 "answer": answer
             })
+            
+            # Add a small delay between requests to avoid rate limiting
+            time.sleep(0.5)
+            
         except Exception as e:
             logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
             results.append({
                 "question": question,
-                "answer": "Error generating answer. Please try again."
+                "answer": "Unable to generate answer at this time. Please try again later."
             })
     return results
 
@@ -179,27 +193,39 @@ def file_processing(file_path):
         batch_size = 5  # Process 5 pages at a time
         
         # Load and process in batches
-        for i in range(0, len(loader.load()), batch_size):
-            batch = loader.load()[i:i + batch_size]
-            processed_batch = []
+        try:
+            pages = loader.load()
+            logger.info(f"Total pages loaded: {len(pages)}")
             
-            for page in batch:
-                # Clean and process each page
-                cleaned_text = clean_text(page.page_content)
-                if cleaned_text.strip():
-                    processed_batch.append(cleaned_text)
+            for i in range(0, len(pages), batch_size):
+                batch = pages[i:i + batch_size]
+                processed_batch = []
+                
+                for page in batch:
+                    # Clean and process each page
+                    cleaned_text = clean_text(page.page_content)
+                    if cleaned_text.strip():
+                        processed_batch.append(cleaned_text)
+                
+                # Combine batch results
+                data.extend(processed_batch)
+                
+                # Force garbage collection after each batch
+                import gc
+                gc.collect()
             
-            # Combine batch results
-            data.extend(processed_batch)
+            if not data:
+                raise ValueError("No content extracted from document")
+                
+            logger.info(f"Document loaded successfully. Number of sections: {len(data)}")
             
-            # Force garbage collection after each batch
-            import gc
-            gc.collect()
-        
-        if not data:
-            raise ValueError("No content extracted from document")
+            # Log a sample of the content for debugging
+            sample_content = ' '.join(data[:2])[:200] + "..."
+            logger.info(f"Sample content: {sample_content}")
             
-        logger.info(f"Document loaded successfully. Number of sections: {len(data)}")
+        except Exception as e:
+            logger.error(f"Error processing document pages: {str(e)}")
+            raise Exception(f"Failed to process document pages: {str(e)}")
         
         # Use smaller chunks for better processing
         splitter = CharacterTextSplitter(
