@@ -18,7 +18,6 @@ from typing import List, Tuple
 import re
 import time
 from itertools import chain
-import csv
 
 # Configure logging with more detailed format
 logging.basicConfig(
@@ -186,8 +185,8 @@ def file_processing(file_path):
             
         # Use smaller chunks for better processing
         splitter = CharacterTextSplitter(
-            chunk_size=1000,  # Further reduced chunk size
-            chunk_overlap=100, # Reduced chunk overlap
+            chunk_size=2000,  # Reduced chunk size
+            chunk_overlap=200,
             separator="\n"
         )
 
@@ -214,99 +213,134 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
                 groq_api_key=os.getenv("GROQ_API_KEY"),
                 model_name="gemma2-9b-it",
                 temperature=0.7,
-                max_tokens=500  # Further reduced max tokens limit
+                max_tokens=1000  # Added max tokens limit
             )
             logger.info("LLM initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing LLM: {str(e)}")
             raise Exception(f"Failed to initialize LLM: {str(e)}")
 
-        # Initialize embeddings
-        logger.info("Initializing embeddings...")
-        embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2", # Using a smaller, efficient model
-            model_kwargs={'device': 'cpu'} # Ensure model runs on CPU, not GPU
-        )
-        logger.info("Embeddings initialized successfully")
-
-        # Create vector store
-        logger.info("Creating vector store...")
-        vector_store = FAISS.from_texts(chunks, embeddings)
-        logger.info("Vector store created successfully")
-
-        # Create retrieval chain
-        logger.info("Creating retrieval chain...")
-        answer_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=vector_store.as_retriever(k=2), # Reduced number of retrieved documents
-            return_source_documents=False
-        )
-        logger.info("Retrieval chain created successfully")
-
-        # Generate questions
-        logger.info("Generating questions...")
-        question_generator_chain = load_summarize_chain(
-            llm=llm,
-            chain_type="stuff",
-            prompt=PromptTemplate.from_template(prompt_template),
-            verbose=True
-        )
-        
-        # Process chunks to generate initial questions
-        initial_questions_str = ""
-        with ThreadPoolExecutor() as executor:
-            futures = [executor.submit(process_chunk_with_retry, chunk, llm, PromptTemplate.from_template(prompt_template)) for chunk in chunks]
-            for i, future in enumerate(futures):
-                try:
-                    result = future.result()
-                    initial_questions_str += result + "\n"
-                    logger.info(f"Processed chunk {i+1}/{len(chunks)}")
-                except Exception as e:
-                    logger.error(f"Error processing future for chunk {i+1}: {str(e)}")
-
-        # Refine questions if there's a refine template
-        qa_list = []
-        if refine_template:
-            logger.info("Refining questions...")
-            refine_chain = load_summarize_chain(
-                llm=llm,
-                chain_type="stuff",
-                prompt=PromptTemplate.from_template(refine_template),
-                verbose=True
+        # Create prompt template
+        try:
+            logger.info("Creating prompt template...")
+            prompt = PromptTemplate(
+                template=prompt_template,
+                input_variables=["text"]
             )
-            
-            # Apply refine chain to initial questions
-            refined_questions = refine_chain.invoke({"input_documents": [Document(page_content=initial_questions_str)], "existing_answer": initial_questions_str, "text": ""}) # Pass initial_questions_str as existing_answer
-            
-            # Extract and parse questions from the refined output
-            if isinstance(refined_questions, dict) and 'output_text' in refined_questions:
-                parsed_questions = re.findall(r'\d+\.\s*(.*?)(?:\n|$)', refined_questions['output_text'])
-            else:
-                parsed_questions = re.findall(r'\d+\.\s*(.*?)(?:\n|$)', str(refined_questions))
+            logger.info("Prompt template created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create prompt template: {str(e)}")
+            raise Exception(f"Failed to create prompt template: {str(e)}")
 
-            # Process questions in batches for answers
-            all_qa_results = []
-            for i in range(0, len(parsed_questions), BATCH_SIZE):
-                batch = parsed_questions[i:i + BATCH_SIZE]
-                all_qa_results.extend(process_batch(batch, answer_chain))
-            qa_list = all_qa_results
+        # Process chunks in parallel
+        logger.info("Generating questions in parallel...")
+        try:
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = [executor.submit(process_chunk_with_retry, chunk, llm, prompt) for chunk in chunks]
+                results = [f.result() for f in futures]
+            logger.info(f"Processed {len(results)} chunks")
+        except Exception as e:
+            logger.error(f"Failed to process chunks in parallel: {str(e)}")
+            raise Exception(f"Failed to process chunks: {str(e)}")
 
-        if not qa_list:
-            raise ValueError("No questions generated or refined.")
+        # Combine and filter questions
+        all_questions = []
+        for i, result in enumerate(results):
+            if not result:
+                logger.warning(f"Empty result for chunk {i}")
+                continue
+            questions = result.split('\n')
+            valid_questions = [q.strip() for q in questions if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
+            all_questions.extend(valid_questions)
+            logger.info(f"Extracted {len(valid_questions)} questions from chunk {i}")
 
-        # Save Q&A to CSV
-        output_filename = f"qa_{Path(file_path).stem}.csv"
-        output_file_path = OUTPUT_DIR / output_filename
-        logger.info(f"Saving Q&A to: {output_file_path}")
-        with open(output_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ["question", "answer"]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(qa_list)
-        
-        logger.info("Q&A saved successfully")
-        return str(output_file_path), qa_list
+        if not all_questions:
+            logger.error("No questions were generated from any chunk")
+            raise Exception("Failed to generate questions. No valid questions were generated from the input text.")
+
+        # Get top 10 questions
+        display_questions = all_questions[:10]
+        logger.info(f"Generated {len(all_questions)} questions, displaying top {len(display_questions)}")
+
+        # Initialize answer generation
+        try:
+            logger.info("Initializing answer generation...")
+            answer_llm = ChatGroq(
+                groq_api_key=os.getenv("GROQ_API_KEY"),
+                model_name="gemma2-9b-it",
+                temperature=0.1
+            )
+            logger.info("Answer LLM initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize answer LLM: {str(e)}")
+            raise Exception(f"Failed to initialize answer LLM: {str(e)}")
+
+        try:
+            logger.info("Creating embeddings...")
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={'device': 'cpu'}
+            )
+            logger.info("Embeddings created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create embeddings: {str(e)}")
+            raise Exception(f"Failed to create embeddings: {str(e)}")
+
+        try:
+            logger.info("Creating vector store...")
+            documents = [Document(page_content=chunk) for chunk in chunks]
+            vector_store = FAISS.from_documents(documents, embeddings)
+            logger.info("Vector store created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create vector store: {str(e)}")
+            raise Exception(f"Failed to create vector store: {str(e)}")
+
+        try:
+            logger.info("Creating answer chain...")
+            answer_chain = RetrievalQA.from_chain_type(
+                llm=answer_llm,
+                chain_type="stuff",
+                retriever=vector_store.as_retriever(search_kwargs={"k": 1})
+            )
+            logger.info("Answer chain created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create answer chain: {str(e)}")
+            raise Exception(f"Failed to create answer chain: {str(e)}")
+
+        # Process questions in batches
+        qa_list = []
+        try:
+            logger.info("Processing questions in batches...")
+            for i in range(0, len(display_questions), BATCH_SIZE):
+                batch = display_questions[i:i + BATCH_SIZE]
+                logger.info(f"Processing batch {i//BATCH_SIZE + 1}")
+                batch_results = process_batch(batch, answer_chain)
+                qa_list.extend(batch_results)
+            logger.info(f"Successfully processed {len(qa_list)} questions")
+        except Exception as e:
+            logger.error(f"Failed to process questions in batches: {str(e)}")
+            raise Exception(f"Failed to process questions: {str(e)}")
+
+        # Generate CSV file
+        try:
+            logger.info("Generating CSV file...")
+            output_path = Path("static/output") / f"{Path(file_path).stem}_QA.csv"
+            with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
+                import csv
+                csv_writer = csv.writer(csvfile)
+                csv_writer.writerow(["Question", "Answer"])
+                
+                for i in range(0, len(all_questions), BATCH_SIZE):
+                    batch = all_questions[i:i + BATCH_SIZE]
+                    batch_results = process_batch(batch, answer_chain)
+                    for qa in batch_results:
+                        csv_writer.writerow([qa["question"], qa["answer"]])
+            logger.info(f"CSV file generated successfully at {output_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate CSV file: {str(e)}")
+            raise Exception(f"Failed to generate CSV file: {str(e)}")
+
+        return str(output_path), qa_list
 
     except Exception as e:
         logger.error(f"Error in LLM pipeline: {str(e)}")
