@@ -67,20 +67,38 @@ async def upload_file(file: UploadFile = File(...)):
         if file.content_type not in allowed_types:
             raise HTTPException(status_code=400, detail="Invalid file type. Please upload a PDF, Word, or PowerPoint file.")
         
+        # Check file size (limit to 10MB)
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB in bytes
+        file_size = 0
+        chunk_size = 8192  # 8KB chunks
+        
+        # Read file in chunks to check size
+        while chunk := await file.read(chunk_size):
+            file_size += len(chunk)
+            if file_size > MAX_FILE_SIZE:
+                raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
+        
+        # Reset file pointer
+        await file.seek(0)
+        
         # Create a unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         extension = allowed_types[file.content_type]
         filename = f"{timestamp}_{file.filename}"
         file_path = DOCS_DIR / filename
         
-        # Save the file
+        # Save the file in chunks
         try:
             with file_path.open("wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+                while chunk := await file.read(chunk_size):
+                    buffer.write(chunk)
             logger.info(f"File uploaded successfully: {filename}")
         except Exception as e:
             logger.error(f"Error saving file: {str(e)}")
             raise HTTPException(status_code=500, detail="Error saving file")
+        finally:
+            # Clean up
+            await file.close()
         
         return JSONResponse(content={"success": True, "file_path": str(file_path)})
     
@@ -91,6 +109,12 @@ async def upload_file(file: UploadFile = File(...)):
 @app.post("/analyze")
 async def analyze_document(file_path: str = Form(...)):
     try:
+        # Add detailed logging
+        logger.info(f"Starting document analysis for path: {file_path}")
+        logger.info(f"File exists: {os.path.exists(file_path)}")
+        logger.info(f"File size: {os.path.getsize(file_path) if os.path.exists(file_path) else 'N/A'}")
+        logger.info(f"GROQ_API_KEY is set: {bool(os.getenv('GROQ_API_KEY'))}")
+        
         # Validate file path
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="File not found")
@@ -113,12 +137,16 @@ async def analyze_document(file_path: str = Form(...)):
             logger.error(f"Error in LLM pipeline: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error generating Q&A: {str(e)}")
         
+        # Clean up processed chunks
+        del processed_chunks
+        import gc
+        gc.collect()
+        
         logger.info(f"Document analyzed successfully: {file_path}")
         return JSONResponse(content={
             "success": True,
             "qa_list": qa_list,
-            "csv_path": output_file,
-            "document_content": processed_chunks
+            "csv_path": output_file
         })
     
     except Exception as e:

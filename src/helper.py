@@ -74,14 +74,24 @@ def clean_text(text: str) -> str:
         logger.error(f"Error in clean_text: {str(e)}")
         return ""
 
-def process_batch(questions: List[str], answer_chain: RetrievalQA) -> List[dict]:
-    """Process a batch of questions together."""
+def process_batch(batch, llm, document_content=None):
     results = []
-    for question in questions:
+    for question in batch:
         try:
-            if not question.strip():
-                continue
-            answer = answer_chain.run(question)
+            # Create a prompt for the question
+            prompt = f"""You are an expert in document analysis. Use the following document content to answer the question. If the answer is not in the content, say "The answer is not available in the provided document content."
+
+Document Content:
+{document_content if document_content else "No document content provided."}
+
+Question: {question}
+
+Answer:"""
+            
+            # Generate answer using ChatGroq
+            response = llm.invoke(prompt)
+            answer = response.content.strip()
+            
             results.append({
                 "question": question,
                 "answer": answer
@@ -90,9 +100,8 @@ def process_batch(questions: List[str], answer_chain: RetrievalQA) -> List[dict]
             logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
             results.append({
                 "question": question,
-                "answer": "Error generating answer. Please try again later."
+                "answer": "Error generating answer. Please try again."
             })
-    time.sleep(RATE_LIMIT_DELAY)  # Single delay for the whole batch
     return results
 
 def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, max_retries: int = MAX_RETRIES) -> str:
@@ -164,39 +173,55 @@ def file_processing(file_path):
         loader = get_document_loader(file_path)
         logger.info("Document loader created successfully")
         
-        # Load document
+        # Load document in smaller batches
         logger.info("Loading document...")
-        data = loader.load()
+        data = []
+        batch_size = 5  # Process 5 pages at a time
+        
+        # Load and process in batches
+        for i in range(0, len(loader.load()), batch_size):
+            batch = loader.load()[i:i + batch_size]
+            processed_batch = []
+            
+            for page in batch:
+                # Clean and process each page
+                cleaned_text = clean_text(page.page_content)
+                if cleaned_text.strip():
+                    processed_batch.append(cleaned_text)
+            
+            # Combine batch results
+            data.extend(processed_batch)
+            
+            # Force garbage collection after each batch
+            import gc
+            gc.collect()
         
         if not data:
             raise ValueError("No content extracted from document")
             
-        logger.info(f"Document loaded successfully. Number of pages/sections: {len(data)}")
+        logger.info(f"Document loaded successfully. Number of sections: {len(data)}")
         
-        # Log first few characters of content for debugging
-        sample_content = ' '.join(page.page_content[:100] for page in data[:2])
-        logger.info(f"Sample content from first two pages: {sample_content}")
-
-        # Combine all text and clean it
-        question_gen = ' '.join(clean_text(page.page_content) for page in data)
-        
-        if not question_gen.strip():
-            raise ValueError("No text content after cleaning")
-            
         # Use smaller chunks for better processing
         splitter = CharacterTextSplitter(
-            chunk_size=2000,  # Reduced chunk size
-            chunk_overlap=200,
+            chunk_size=1000,  # Reduced chunk size
+            chunk_overlap=100,  # Reduced overlap
             separator="\n"
         )
 
-        chunks = splitter.split_text(question_gen)
-        logger.info(f"Text split into {len(chunks)} chunks")
+        # Process chunks in batches
+        all_chunks = []
+        for section in data:
+            section_chunks = splitter.split_text(section)
+            all_chunks.extend(section_chunks)
+            # Force garbage collection after each section
+            gc.collect()
         
-        if not chunks:
+        logger.info(f"Text split into {len(all_chunks)} chunks")
+        
+        if not all_chunks:
             raise ValueError("No chunks generated after text splitting")
 
-        return chunks
+        return all_chunks
     
     except Exception as e:
         logger.error(f"Error in file processing: {str(e)}")
@@ -205,20 +230,31 @@ def file_processing(file_path):
 def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
     try:
         logger.info("Starting LLM pipeline...")
-
+        
+        # Process chunks in smaller batches to reduce memory usage
+        BATCH_SIZE = 2  # Reduced batch size
+        
+        # Combine chunks for document content
+        document_content = "\n".join(chunks)
+        
         # Initialize LLM with optimized settings
         try:
             logger.info("Initializing LLM...")
+            if not os.getenv("GROQ_API_KEY"):
+                raise ValueError("GROQ_API_KEY environment variable is not set")
+                
             llm = ChatGroq(
                 groq_api_key=os.getenv("GROQ_API_KEY"),
                 model_name="gemma2-9b-it",
                 temperature=0.7,
-                max_tokens=1000  # Added max tokens limit
+                max_tokens=500  # Reduced max tokens
             )
-            logger.info("LLM initialized successfully")
+            # Test the LLM connection
+            test_response = llm.invoke("Test connection")
+            logger.info("LLM initialized and tested successfully")
         except Exception as e:
             logger.error(f"Error initializing LLM: {str(e)}")
-            raise Exception(f"Failed to initialize LLM: {str(e)}")
+            raise Exception(f"Failed to initialize LLM. Please check your GROQ_API_KEY and internet connection: {str(e)}")
 
         # Create prompt template
         try:
@@ -232,96 +268,68 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
             logger.error(f"Failed to create prompt template: {str(e)}")
             raise Exception(f"Failed to create prompt template: {str(e)}")
 
-        # Process chunks in parallel
-        logger.info("Generating questions in parallel...")
-        try:
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = [executor.submit(process_chunk_with_retry, chunk, llm, prompt) for chunk in chunks]
-                results = [f.result() for f in futures]
-            logger.info(f"Processed {len(results)} chunks")
-        except Exception as e:
-            logger.error(f"Failed to process chunks in parallel: {str(e)}")
-            raise Exception(f"Failed to process chunks: {str(e)}")
-
-        # Combine and filter questions
+        # Process chunks in smaller batches
         all_questions = []
-        for i, result in enumerate(results):
-            if not result:
-                logger.warning(f"Empty result for chunk {i}")
+        for i in range(0, len(chunks), BATCH_SIZE):
+            batch = chunks[i:i + BATCH_SIZE]
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:  # Reduced workers
+                    futures = [executor.submit(process_chunk_with_retry, chunk, llm, prompt) for chunk in batch]
+                    results = [f.result() for f in futures]
+                
+                for result in results:
+                    if result:
+                        questions = result.split('\n')
+                        valid_questions = [q.strip() for q in questions if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
+                        all_questions.extend(valid_questions)
+                
+                # Force garbage collection after each batch
+                import gc
+                gc.collect()
+                
+            except Exception as e:
+                logger.error(f"Error processing batch {i//BATCH_SIZE + 1}: {str(e)}")
                 continue
-            questions = result.split('\n')
-            valid_questions = [q.strip() for q in questions if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
-            all_questions.extend(valid_questions)
-            logger.info(f"Extracted {len(valid_questions)} questions from chunk {i}")
 
         if not all_questions:
             logger.error("No questions were generated from any chunk")
             raise Exception("Failed to generate questions. No valid questions were generated from the input text.")
 
-        # Get top 10 questions
-        display_questions = all_questions[:10]
+        # Get top 5 questions instead of 10 to reduce memory usage
+        display_questions = all_questions[:5]
         logger.info(f"Generated {len(all_questions)} questions, displaying top {len(display_questions)}")
 
-        # Initialize answer generation
+        # Initialize answer generation with reduced memory usage
         try:
             logger.info("Initializing answer generation...")
             answer_llm = ChatGroq(
                 groq_api_key=os.getenv("GROQ_API_KEY"),
                 model_name="gemma2-9b-it",
-                temperature=0.1
+                temperature=0.1,
+                max_tokens=300  # Reduced max tokens
             )
             logger.info("Answer LLM initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize answer LLM: {str(e)}")
             raise Exception(f"Failed to initialize answer LLM: {str(e)}")
 
-        try:
-            logger.info("Creating embeddings...")
-            embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={'device': 'cpu'}
-            )
-            logger.info("Embeddings created successfully")
-        except Exception as e:
-            logger.error(f"Failed to create embeddings: {str(e)}")
-            raise Exception(f"Failed to create embeddings: {str(e)}")
-
-        try:
-            logger.info("Creating vector store...")
-            documents = [Document(page_content=chunk) for chunk in chunks]
-            vector_store = FAISS.from_documents(documents, embeddings)
-            logger.info("Vector store created successfully")
-        except Exception as e:
-            logger.error(f"Failed to create vector store: {str(e)}")
-            raise Exception(f"Failed to create vector store: {str(e)}")
-
-        try:
-            logger.info("Creating answer chain...")
-            answer_chain = RetrievalQA.from_chain_type(
-                llm=answer_llm,
-                chain_type="stuff",
-                retriever=vector_store.as_retriever(search_kwargs={"k": 1})
-            )
-            logger.info("Answer chain created successfully")
-        except Exception as e:
-            logger.error(f"Failed to create answer chain: {str(e)}")
-            raise Exception(f"Failed to create answer chain: {str(e)}")
-
-        # Process questions in batches
+        # Process questions in smaller batches
         qa_list = []
         try:
             logger.info("Processing questions in batches...")
             for i in range(0, len(display_questions), BATCH_SIZE):
                 batch = display_questions[i:i + BATCH_SIZE]
                 logger.info(f"Processing batch {i//BATCH_SIZE + 1}")
-                batch_results = process_batch(batch, answer_chain)
+                batch_results = process_batch(batch, answer_llm, document_content)
                 qa_list.extend(batch_results)
+                # Force garbage collection after each batch
+                gc.collect()
             logger.info(f"Successfully processed {len(qa_list)} questions")
         except Exception as e:
             logger.error(f"Failed to process questions in batches: {str(e)}")
             raise Exception(f"Failed to process questions: {str(e)}")
 
-        # Generate CSV file
+        # Generate CSV file with reduced memory usage
         try:
             logger.info("Generating CSV file...")
             output_path = Path("static/output") / f"{Path(file_path).stem}_QA.csv"
@@ -332,9 +340,11 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
                 
                 for i in range(0, len(all_questions), BATCH_SIZE):
                     batch = all_questions[i:i + BATCH_SIZE]
-                    batch_results = process_batch(batch, answer_chain)
+                    batch_results = process_batch(batch, answer_llm, document_content)
                     for qa in batch_results:
                         csv_writer.writerow([qa["question"], qa["answer"]])
+                    # Force garbage collection after each batch
+                    gc.collect()
             logger.info(f"CSV file generated successfully at {output_path}")
         except Exception as e:
             logger.error(f"Failed to generate CSV file: {str(e)}")
