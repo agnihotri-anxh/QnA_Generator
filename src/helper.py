@@ -25,18 +25,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-
-# Set environment variables only if they exist
-if GROQ_API_KEY:
-    os.environ["GROQ_API_KEY"] = GROQ_API_KEY
-else:
-    logger.warning("GROQ_API_KEY not found in environment variables")
-
-if HUGGINGFACE_API_KEY:
-    os.environ["HUGGINGFACE_API_KEY"] = HUGGINGFACE_API_KEY
-else:
-    logger.warning("HUGGINGFACE_API_KEY not found in environment variables")
+os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 # Rate limiting settings
 RATE_LIMIT_DELAY = 0.5  # Reduced delay between API calls
@@ -65,18 +54,8 @@ def get_document_loader(file_path):
 
 def clean_text(text: str) -> str:
     """Clean and normalize text for better processing."""
-    # Remove special characters but keep important punctuation
-    text = re.sub(r'[^\w\s.,!?;:()\-\n]', ' ', text)
-    # Fix spacing around punctuation
-    text = re.sub(r'\s+([.,!?;:])', r'\1', text)
-    # Fix multiple spaces
     text = re.sub(r'\s+', ' ', text)
-    # Fix multiple newlines
-    text = re.sub(r'\n+', '\n', text)
-    # Fix spacing around parentheses
-    text = re.sub(r'\(\s+', '(', text)
-    text = re.sub(r'\s+\)', ')', text)
-    # Remove spaces at start and end
+    text = re.sub(r'[^\w\s.,!?-]', '', text)
     return text.strip()
 
 def process_batch(questions: List[str], answer_chain: RetrievalQA) -> List[dict]:
@@ -107,32 +86,39 @@ def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, 
                 logger.warning("Empty chunk after cleaning")
                 return ""
 
-            # Add explicit instruction for question format
-            enhanced_prompt = prompt.template + "\n\nPlease format your questions as a numbered list, with each question on a new line. Each question should end with a question mark (?)."
-
             logger.info(f"Processing chunk (attempt {attempt + 1}/{max_retries})")
             chain = load_summarize_chain(
                 llm=llm,
                 chain_type="stuff",
-                prompt=PromptTemplate(
-                    template=enhanced_prompt,
-                    input_variables=["text"]
-                ),
+                prompt=prompt,
                 verbose=True
             )
-            result = chain.invoke([Document(page_content=cleaned_chunk)])
-            logger.info(f"Successfully processed chunk (attempt {attempt + 1})")
             
-            # Extract text from the result dictionary
-            if isinstance(result, dict) and 'output_text' in result:
-                return result['output_text']
-            elif isinstance(result, dict) and 'text' in result:
-                return result['text']
-            elif isinstance(result, str):
-                return result
-            else:
-                logger.error(f"Unexpected result type: {type(result)}")
-                return ""
+            # Add more context to the prompt
+            formatted_prompt = prompt.format(text=cleaned_chunk)
+            logger.info(f"Formatted prompt length: {len(formatted_prompt)}")
+            
+            result = chain.invoke([Document(page_content=cleaned_chunk)])
+            
+            # Handle dictionary response
+            if isinstance(result, dict):
+                if 'output_text' in result:
+                    result = result['output_text']
+                elif 'text' in result:
+                    result = result['text']
+                else:
+                    logger.warning(f"Unexpected dictionary format: {result}")
+                    result = str(result)
+            
+            if not result or not result.strip():
+                logger.warning(f"Empty result received from LLM on attempt {attempt + 1}")
+                if attempt == max_retries - 1:
+                    return ""
+                continue
+                
+            logger.info(f"Successfully processed chunk (attempt {attempt + 1})")
+            return result
+            
         except Exception as e:
             logger.error(f"Attempt {attempt + 1} failed with error: {str(e)}")
             if attempt == max_retries - 1:
@@ -140,21 +126,6 @@ def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, 
                 return ""
             logger.warning(f"Attempt {attempt + 1} failed, retrying... Error: {str(e)}")
             time.sleep(RATE_LIMIT_DELAY * (attempt + 1))
-
-def create_embeddings():
-    """Create embeddings with proper error handling."""
-    try:
-        logger.info("Creating embeddings...")
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-        logger.info("Embeddings created successfully")
-        return embeddings
-    except Exception as e:
-        logger.error(f"Failed to create embeddings: {str(e)}")
-        raise Exception(f"Failed to create embeddings: {str(e)}")
 
 def file_processing(file_path):
     try:
@@ -221,9 +192,9 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
         try:
             logger.info("Initializing LLM...")
             llm = ChatGroq(
-                temperature=0.3,
+                groq_api_key=os.getenv("GROQ_API_KEY"),
                 model_name="gemma2-9b-it",
-                max_tokens=300
+                temperature=0.7
             )
             logger.info("LLM initialized successfully")
         except Exception as e:
@@ -259,25 +230,10 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
             if not result:
                 logger.warning(f"Empty result for chunk {i}")
                 continue
-            try:
-                # Handle both string and dictionary responses
-                if isinstance(result, dict):
-                    if 'output_text' in result:
-                        questions = result['output_text'].split('\n')
-                    elif 'text' in result:
-                        questions = result['text'].split('\n')
-                    else:
-                        logger.error(f"Unexpected dictionary format: {result}")
-                        continue
-                else:
-                    questions = result.split('\n')
-                
-                valid_questions = [q.strip() for q in questions if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
-                all_questions.extend(valid_questions)
-                logger.info(f"Extracted {len(valid_questions)} questions from chunk {i}")
-            except Exception as e:
-                logger.error(f"Error processing questions from chunk {i}: {str(e)}")
-                continue
+            questions = result.split('\n')
+            valid_questions = [q.strip() for q in questions if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
+            all_questions.extend(valid_questions)
+            logger.info(f"Extracted {len(valid_questions)} questions from chunk {i}")
 
         if not all_questions:
             logger.error("No questions were generated from any chunk")
@@ -291,9 +247,9 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
         try:
             logger.info("Initializing answer generation...")
             answer_llm = ChatGroq(
-                temperature=0.1,
+                groq_api_key=os.getenv("GROQ_API_KEY"),
                 model_name="gemma2-9b-it",
-                max_tokens=200
+                temperature=0.1
             )
             logger.info("Answer LLM initialized successfully")
         except Exception as e:
@@ -301,7 +257,12 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
             raise Exception(f"Failed to initialize answer LLM: {str(e)}")
 
         try:
-            embeddings = create_embeddings()
+            logger.info("Creating embeddings...")
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={'device': 'cpu'}
+            )
+            logger.info("Embeddings created successfully")
         except Exception as e:
             logger.error(f"Failed to create embeddings: {str(e)}")
             raise Exception(f"Failed to create embeddings: {str(e)}")

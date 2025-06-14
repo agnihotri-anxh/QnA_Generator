@@ -7,11 +7,16 @@ Given the text below:
 {text}
 ------------
 
-Please generate a thoughtful and comprehensive list of questions that thoroughly test the coder’s understanding of the material. Ensure that:
-- The questions cover all key concepts and technical details in the text.
-- The questions challenge both foundational and advanced understanding.
-- The questions are clear and concise, with no ambiguity.
-- The questions vary in difficulty, including some that encourage critical thinking.
+Please generate a list of questions that test understanding of the material. Each question should:
+1. Start with a number followed by a period (e.g., "1.")
+2. End with a question mark
+3. Be clear and concise
+4. Test both basic and advanced understanding
+
+Format your response exactly like this example:
+1. What is the main concept discussed in the text?
+2. How does this concept apply in real-world scenarios?
+3. What are the key components of this system?
 
 QUESTIONS:
 """)

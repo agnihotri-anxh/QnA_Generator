@@ -3,7 +3,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
-from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import shutil
 import os
@@ -11,6 +10,7 @@ import logging
 import uvicorn
 from datetime import datetime
 from src.helper import file_processing, llm_pipeline
+from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging
 logging.basicConfig(
@@ -19,16 +19,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="QA Generator",
-    description="An API for generating questions and answers from documents",
-    version="1.0.0"
-)
+app = FastAPI()
 
-# Add CORS middleware with proper settings
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your frontend domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -101,7 +97,7 @@ async def analyze_document(file_path: str = Form(...)):
     
     except Exception as e:
         error_msg = f"Error analyzing document: {str(e)}"
-        logger.error(error_msg, exc_info=True)
+        logger.error(error_msg, exc_info=True)  # This will log the full stack trace
         raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/download/{filename}")
@@ -111,16 +107,10 @@ async def download_file(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
 
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
     uvicorn.run(
         "app:app",
-        host="0.0.0.0",
-        port=port,
+        host="127.0.0.1",
+        port=8000,
         reload=True
     )
