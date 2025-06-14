@@ -136,11 +136,12 @@ async def download_file(filename: str):
 if __name__ == "__main__":
     # Get port from environment variable or default to 8000
     port = int(os.getenv("PORT", 8000))
-    host = os.getenv("HOST", "0.0.0.0")
+    # Use localhost for local development, 0.0.0.0 for production
+    host = os.getenv("HOST", "127.0.0.1")
     
     uvicorn.run(
         "app:app",
         host=host,
         port=port,
-        reload=False  # Set to False in production
+        reload=True  # Enable reload for local development
     )
