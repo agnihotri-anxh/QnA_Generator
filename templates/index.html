@@ -188,8 +188,7 @@
                 <!-- Loading Indicator -->
                 <div class="loading" id="loading">
                     <i class="fas fa-spinner fa-spin"></i>
-                    <p class="mt-2" id="loadingStatus">Processing your document...</p>
-                    <p class="text-muted small" id="currentFileName"></p>
+                    <p class="mt-2">Processing your document...</p>
                 </div>
 
                 <!-- Results Section -->
@@ -341,8 +340,6 @@
             try {
                 document.getElementById('loading').style.display = 'block';
                 document.getElementById('results').style.display = 'none';
-                document.getElementById('loadingStatus').textContent = 'Uploading document...';
-                document.getElementById('currentFileName').textContent = `File: ${file.name}`;
 
                 const response = await fetch('/upload', {
                     method: 'POST',
@@ -360,7 +357,6 @@
                     toast.show();
                     
                     currentFileType = file.type;
-                    document.getElementById('loadingStatus').textContent = 'Analyzing document...';
                     await analyzeDocument(result.file_path);
                 } else {
                     throw new Error(result.error || 'Upload failed');
@@ -388,7 +384,6 @@
 
                 const result = await response.json();
                 if (result.success) {
-                    document.getElementById('loadingStatus').textContent = 'Generating Q&A...';
                     displayResults(result.qa_list, result.csv_path, result.document_content, filePath);
                 } else {
                     throw new Error(result.error || 'Analysis failed');
@@ -398,7 +393,6 @@
                 alert('Error analyzing document: ' + error.message);
             } finally {
                 document.getElementById('loading').style.display = 'none';
-                document.getElementById('currentFileName').textContent = '';
             }
         }
 
@@ -424,14 +418,15 @@
                 qaListDiv.appendChild(card);
             });
 
-            // Set document type indicator
+            // Set document type indicator and file name
+            const fileName = filePath.split('/').pop();
             if (currentFileType === 'application/pdf') {
-                docTypeText.innerHTML = '<i class="fas fa-file-pdf"></i> PDF Document';
+                docTypeText.innerHTML = `<i class="fas fa-file-pdf"></i> PDF Document: ${fileName}`;
                 pdfViewerContainer.style.display = 'block';
                 textContentViewer.style.display = 'none';
                 loadPDF(filePath);
             } else {
-                docTypeText.innerHTML = '<i class="fas fa-file-alt"></i> Text Document';
+                docTypeText.innerHTML = `<i class="fas fa-file-alt"></i> Document: ${fileName}`;
                 pdfViewerContainer.style.display = 'none';
                 textContentViewer.style.display = 'block';
                 
@@ -469,9 +464,9 @@
         // PDF Viewer Functions
         async function loadPDF(filePath) {
             try {
-                // Extract just the filename from the full path
-                const fileName = filePath.split('\\').pop();  // Changed from split('/') to split('\\') for Windows paths
-                const pdfUrl = `/static/Docs/${fileName}`;
+                // Convert file path to URL
+                const fileName = filePath.split('/').pop();
+                const pdfUrl = `/static/docs/${fileName}`;
                 
                 const loadingTask = pdfjsLib.getDocument(pdfUrl);
                 currentPdfDoc = await loadingTask.promise;

@@ -37,7 +37,7 @@ app.add_middleware(
 # Create necessary directories with absolute paths
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-DOCS_DIR = STATIC_DIR / "Docs"
+DOCS_DIR = STATIC_DIR / "docs"
 OUTPUT_DIR = STATIC_DIR / "output"
 
 for directory in [DOCS_DIR, OUTPUT_DIR]:
@@ -146,7 +146,9 @@ async def analyze_document(file_path: str = Form(...)):
         return JSONResponse(content={
             "success": True,
             "qa_list": qa_list,
-            "csv_path": output_file
+            "csv_path": output_file,
+            "document_content": processed_chunks,
+            "file_name": os.path.basename(file_path)
         })
     
     except Exception as e:
