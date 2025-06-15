@@ -38,9 +38,15 @@ if not GROQ_API_KEY:
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 # Rate limiting settings
-RATE_LIMIT_DELAY = 1.0  # Increased delay for better stability
+RATE_LIMIT_DELAY = 2.0  # Increased base delay
 MAX_RETRIES = 3
-BATCH_SIZE = 3  # Reduced batch size for better stability
+BATCH_SIZE = 2  # Reduced batch size
+MAX_TOKENS = 300  # Reduced max tokens per request
+BACKOFF_FACTOR = 2.0  # Exponential backoff factor
+
+def get_backoff_delay(attempt: int) -> float:
+    """Calculate exponential backoff delay."""
+    return RATE_LIMIT_DELAY * (BACKOFF_FACTOR ** attempt)
 
 def get_document_loader(file_path):
     logger.info(f"Getting document loader for file: {file_path}")
@@ -78,8 +84,8 @@ def process_batch(batch, llm, document_content=None):
     results = []
     for question in batch:
         try:
-            # Create a more detailed prompt for the question
-            prompt = f"""You are an expert document analyzer. Your task is to answer questions based on the provided document content.
+            # Create a more structured prompt for better answer generation
+            prompt = f"""You are an expert in document analysis. Your task is to answer the following question based on the provided document content.
 
 Document Content:
 {document_content if document_content else "No document content provided."}
@@ -87,34 +93,88 @@ Document Content:
 Question: {question}
 
 Instructions:
-1. If the answer is in the document content, provide a clear and concise answer.
-2. If the answer is not in the document content, respond with "The answer is not available in the provided document content."
-3. If the document content is empty or not provided, respond with "No document content was provided to answer this question."
-4. Do not make up or infer answers that are not explicitly stated in the document content.
+1. Provide a clear and concise answer based on the document content
+2. If the answer is not in the content, explicitly state "The answer is not available in the provided document content"
+3. Focus on accuracy and relevance
+4. Keep the answer concise but informative
 
 Answer:"""
             
-            # Generate answer using ChatGroq
-            response = llm.invoke(prompt)
-            answer = response.content.strip()
-            
-            # Validate the answer
-            if not answer or answer.isspace():
-                answer = "The answer is not available in the provided document content."
-            
-            results.append({
-                "question": question,
-                "answer": answer
-            })
-            
-            # Add a small delay between requests to avoid rate limiting
-            time.sleep(0.5)
-            
+            # Generate answer using ChatGroq with improved error handling
+            try:
+                # Create a message for the LLM with system context
+                messages = [
+                    {"role": "system", "content": "You are an expert in document analysis and question answering. Your responses should be accurate, concise, and based solely on the provided document content."},
+                    {"role": "user", "content": prompt}
+                ]
+                
+                # Get response from LLM with improved retry mechanism
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        response = llm.invoke(messages)
+                        break
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
+                            if attempt == MAX_RETRIES - 1:
+                                raise e
+                            backoff_delay = get_backoff_delay(attempt)
+                            logger.warning(f"Rate limit hit, retrying in {backoff_delay:.2f} seconds (attempt {attempt + 1}/{MAX_RETRIES})")
+                            time.sleep(backoff_delay)
+                        else:
+                            raise e
+                
+                # Extract the answer from the response with multiple fallback methods
+                if isinstance(response, dict) and 'choices' in response:
+                    answer = response['choices'][0]['message']['content'].strip()
+                elif hasattr(response, 'content'):
+                    answer = response.content.strip()
+                elif isinstance(response, str):
+                    answer = response.strip()
+                else:
+                    answer = str(response).strip()
+                
+                # Validate and clean the answer
+                if not answer or answer.isspace():
+                    answer = "Unable to generate an answer from the document content."
+                elif len(answer) < 10:  # Too short to be a meaningful answer
+                    answer = "The generated answer was too short. Please try again."
+                
+                results.append({
+                    "question": question,
+                    "answer": answer
+                })
+                
+            except Exception as e:
+                logger.error(f"Error in LLM response processing: {str(e)}")
+                # Try alternative approach with simpler prompt
+                try:
+                    simple_prompt = f"Based on this content: {document_content}\n\nQuestion: {question}\n\nAnswer:"
+                    response = llm.invoke(simple_prompt)
+                    answer = str(response).strip()
+                    
+                    if answer and not answer.isspace() and len(answer) >= 10:
+                        results.append({
+                            "question": question,
+                            "answer": answer
+                        })
+                    else:
+                        results.append({
+                            "question": question,
+                            "answer": "Unable to generate a valid answer from the document content."
+                        })
+                except Exception as e2:
+                    logger.error(f"Error in alternative LLM response processing: {str(e2)}")
+                    results.append({
+                        "question": question,
+                        "answer": "Error processing LLM response. Please try again."
+                    })
+                
         except Exception as e:
             logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
             results.append({
                 "question": question,
-                "answer": "Unable to generate answer at this time. Please try again later."
+                "answer": "Error generating answer. Please try again."
             })
     return results
 
@@ -193,39 +253,27 @@ def file_processing(file_path):
         batch_size = 5  # Process 5 pages at a time
         
         # Load and process in batches
-        try:
-            pages = loader.load()
-            logger.info(f"Total pages loaded: {len(pages)}")
+        for i in range(0, len(loader.load()), batch_size):
+            batch = loader.load()[i:i + batch_size]
+            processed_batch = []
             
-            for i in range(0, len(pages), batch_size):
-                batch = pages[i:i + batch_size]
-                processed_batch = []
-                
-                for page in batch:
-                    # Clean and process each page
-                    cleaned_text = clean_text(page.page_content)
-                    if cleaned_text.strip():
-                        processed_batch.append(cleaned_text)
-                
-                # Combine batch results
-                data.extend(processed_batch)
-                
-                # Force garbage collection after each batch
-                import gc
-                gc.collect()
+            for page in batch:
+                # Clean and process each page
+                cleaned_text = clean_text(page.page_content)
+                if cleaned_text.strip():
+                    processed_batch.append(cleaned_text)
             
-            if not data:
-                raise ValueError("No content extracted from document")
-                
-            logger.info(f"Document loaded successfully. Number of sections: {len(data)}")
+            # Combine batch results
+            data.extend(processed_batch)
             
-            # Log a sample of the content for debugging
-            sample_content = ' '.join(data[:2])[:200] + "..."
-            logger.info(f"Sample content: {sample_content}")
+            # Force garbage collection after each batch
+            import gc
+            gc.collect()
+        
+        if not data:
+            raise ValueError("No content extracted from document")
             
-        except Exception as e:
-            logger.error(f"Error processing document pages: {str(e)}")
-            raise Exception(f"Failed to process document pages: {str(e)}")
+        logger.info(f"Document loaded successfully. Number of sections: {len(data)}")
         
         # Use smaller chunks for better processing
         splitter = CharacterTextSplitter(
@@ -262,6 +310,7 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
         
         # Combine chunks for document content
         document_content = "\n".join(chunks)
+        logger.info(f"Document content length: {len(document_content)} characters")
         
         # Initialize LLM with optimized settings
         try:
@@ -273,10 +322,10 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
                 groq_api_key=os.getenv("GROQ_API_KEY"),
                 model_name="gemma2-9b-it",
                 temperature=0.7,
-                max_tokens=500  # Reduced max tokens
+                max_tokens=MAX_TOKENS  # Use the new token limit
             )
             # Test the LLM connection
-            test_response = llm.invoke("Test connection")
+            test_response = llm.invoke([{"role": "user", "content": "Test connection"}])
             logger.info("LLM initialized and tested successfully")
         except Exception as e:
             logger.error(f"Error initializing LLM: {str(e)}")
@@ -332,7 +381,7 @@ def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
                 groq_api_key=os.getenv("GROQ_API_KEY"),
                 model_name="gemma2-9b-it",
                 temperature=0.1,
-                max_tokens=300  # Reduced max tokens
+                max_tokens=MAX_TOKENS  # Use the new token limit
             )
             logger.info("Answer LLM initialized successfully")
         except Exception as e:

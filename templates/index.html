@@ -470,25 +470,17 @@
         async function loadPDF(filePath) {
             try {
                 // Extract just the filename from the full path
-                const fileName = filePath.split('\\').pop();
-                // Use the direct PDF serving endpoint
+                const fileName = filePath.split('\\').pop();  // Changed from split('/') to split('\\') for Windows paths
                 const pdfUrl = `/static/Docs/${fileName}`;
                 
-                console.log('Loading PDF from:', pdfUrl); // Debug log
                 const loadingTask = pdfjsLib.getDocument(pdfUrl);
                 currentPdfDoc = await loadingTask.promise;
                 document.getElementById('pageCount').textContent = currentPdfDoc.numPages;
                 renderPage(1);
             } catch (error) {
                 console.error('Error loading PDF:', error);
-                // Show error in the UI
-                const pdfViewerContainer = document.getElementById('pdfViewerContainer');
-                pdfViewerContainer.innerHTML = `
-                    <div class="alert alert-danger" role="alert">
-                        <i class="fas fa-exclamation-circle"></i>
-                        Error loading PDF document. Please try again.
-                    </div>
-                `;
+                // Don't show alert, just log the error
+                console.log('Error loading PDF document');
             }
         }
 
