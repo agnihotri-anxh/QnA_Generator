@@ -37,7 +37,7 @@ app.add_middleware(
 # Create necessary directories with absolute paths
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-DOCS_DIR = STATIC_DIR / "docs"
+DOCS_DIR = STATIC_DIR / "Docs"
 OUTPUT_DIR = STATIC_DIR / "output"
 
 for directory in [DOCS_DIR, OUTPUT_DIR]:
