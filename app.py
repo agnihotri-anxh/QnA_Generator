@@ -40,7 +40,8 @@ STATIC_DIR = BASE_DIR / "static"
 DOCS_DIR = STATIC_DIR / "Docs"
 OUTPUT_DIR = STATIC_DIR / "output"
 
-for directory in [DOCS_DIR, OUTPUT_DIR]:
+# Create directories if they don't exist
+for directory in [STATIC_DIR, DOCS_DIR, OUTPUT_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
     logger.info(f"Created directory: {directory}")
 
@@ -160,6 +161,14 @@ async def download_file(filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
+
+# Add a specific route for serving PDF files
+@app.get("/static/Docs/{filename}")
+async def serve_pdf(filename: str):
+    file_path = DOCS_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, media_type="application/pdf")
 
 if __name__ == "__main__":
     # Get port from environment variable or default to 8000
