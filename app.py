@@ -186,10 +186,11 @@ async def download_file(filename: str):
 if __name__ == "__main__":
     logger.info("Starting server...")
     port = int(os.getenv("PORT", 8080))
+    logger.info(f"Server will be available at http://localhost:{port}")
     uvicorn.run(
         "app:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=port,
-        reload=True,
-        log_level="debug"
+        reload=False,  # Disabled auto-reload
+        log_level="info"  # Changed to info level for cleaner logs
     )
