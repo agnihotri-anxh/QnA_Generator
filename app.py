@@ -202,8 +202,14 @@ async def download_file(filename: str):
 if __name__ == "__main__":
     logger.info("Starting server...")
     port = int(os.getenv("PORT", 8000))
-    host = "127.0.0.1"  # Use localhost for local development
-    logger.info(f"Server will be available at http://localhost:{port}")
+    host = os.getenv("HOST", "127.0.0.1")
+    logger.info(f"Server will be available at http://{host}:{port}")
+    
+    # Ensure directories exist
+    for directory in [DOCS_DIR, OUTPUT_DIR]:
+        directory.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Ensuring directory exists: {directory}")
+    
     uvicorn.run(
         "app:app",
         host=host,

@@ -2,12 +2,16 @@ services:
   - type: web
     name: qa-generator
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    buildCommand: |
+      pip install -r requirements.txt
+      mkdir -p static/docs static/output
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.0
       - key: GROQ_API_KEY
         sync: false
+      - key: PORT
+        value: 10000
     healthCheckPath: /
     autoDeploy: true 
