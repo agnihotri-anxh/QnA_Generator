@@ -151,19 +151,35 @@ async def analyze_document(request: Request, pdf_filename: str = Form(...)):
             )
         
         # Generate CSV file and get content
-        output_file, qa_list, content_sections = get_csv(pdf_filename)
+        try:
+            output_file, qa_list, content_sections = get_csv(pdf_filename)
+            
+            if not qa_list:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="No questions and answers were generated"
+                )
+            
+            return {
+                "output_file": output_file,
+                "qa_list": qa_list,
+                "document_content": content_sections
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in document analysis: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error analyzing document: {str(e)}"
+            )
         
-        return {
-            "output_file": output_file,
-            "qa_list": qa_list,
-            "document_content": content_sections
-        }
-        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error analyzing document: {str(e)}")
+        logger.error(f"Unexpected error in analyze_document: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail="An unexpected error occurred while processing your request"
         )
 
 @app.get("/download/{filename}")

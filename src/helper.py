@@ -177,15 +177,16 @@ Answer:"""
                 ]
                 
                 # Get response from LLM with improved retry mechanism
+                response = None
                 for attempt in range(MAX_RETRIES):
                     try:
                         response = llm.invoke(messages)
-                        break
+                        if response:  # Ensure we got a valid response
+                            break
                     except Exception as e:
                         error_msg = str(e)
                         if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
                             if attempt == MAX_RETRIES - 1:
-                                # If we've exhausted all retries, return a rate limit message
                                 results.append({
                                     "question": question,
                                     "answer": "Unable to generate answer due to API rate limit. Please try again later or upgrade your API tier."
@@ -196,17 +197,23 @@ Answer:"""
                             logger.warning(f"Rate limit hit, retrying in {backoff_delay:.2f} seconds (attempt {attempt + 1}/{MAX_RETRIES})")
                             time.sleep(backoff_delay)
                         else:
+                            logger.error(f"Error in LLM invocation: {error_msg}")
                             raise e
                 
+                if not response:
+                    raise ValueError("No response received from LLM after all retries")
+                
                 # Extract the answer from the response with multiple fallback methods
-                if isinstance(response, dict) and 'choices' in response:
-                    answer = response['choices'][0]['message']['content'].strip()
+                answer = None
+                if isinstance(response, dict):
+                    if 'choices' in response and response['choices']:
+                        answer = response['choices'][0]['message']['content'].strip()
+                    elif 'content' in response:
+                        answer = response['content'].strip()
                 elif hasattr(response, 'content'):
                     answer = response.content.strip()
                 elif isinstance(response, str):
                     answer = response.strip()
-                else:
-                    answer = str(response).strip()
                 
                 # Validate and clean the answer
                 if not answer or answer.isspace():
@@ -229,52 +236,18 @@ Answer:"""
                 
             except Exception as e:
                 logger.error(f"Error in LLM response processing: {str(e)}")
-                # Try alternative approach with simpler prompt
-                try:
-                    simple_prompt = f"Based on this content: {document_content}\n\nQuestion: {question}\n\nAnswer:"
-                    response = llm.invoke(simple_prompt)
-                    answer = str(response).strip()
-                    
-                    if answer and not answer.isspace() and len(answer) >= 10:
-                        results.append({
-                            "question": question,
-                            "answer": answer
-                        })
-                    else:
-                        results.append({
-                            "question": question,
-                            "answer": "Unable to generate a valid answer from the document content."
-                        })
-                except Exception as e2:
-                    logger.error(f"Error in alternative LLM response processing: {str(e2)}")
-                    if "rate_limit_exceeded" in str(e2).lower() or "429" in str(e2):
-                        results.append({
-                            "question": question,
-                            "answer": "Unable to generate answer due to API rate limit. Please try again later or upgrade your API tier."
-                        })
-                        logger.warning("Rate limit reached. Skipping remaining questions.")
-                        return results
-                    else:
-                        results.append({
-                            "question": question,
-                            "answer": "Error processing LLM response. Please try again."
-                        })
+                results.append({
+                    "question": question,
+                    "answer": "An error occurred while processing your request. Please try again."
+                })
                 
         except Exception as e:
-            error_msg = str(e)
-            if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
-                logger.warning("Rate limit reached")
-                results.append({
-                    "question": question,
-                    "answer": "Unable to generate answer due to API rate limit. Please try again later or upgrade your API tier."
-                })
-                return results
-            else:
-                logger.error(f"Error generating answer for question: {question}. Error: {error_msg}")
-                results.append({
-                    "question": question,
-                    "answer": "Error generating answer. Please try again."
-                })
+            logger.error(f"Error processing question: {str(e)}")
+            results.append({
+                "question": question,
+                "answer": "An error occurred while processing your request. Please try again."
+            })
+    
     return results
 
 def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, max_retries: int = MAX_RETRIES) -> str:
