@@ -14,3 +14,4 @@ werkzeug==3.0.1
 huggingface-hub>=0.30.2
 tokenizers>=0.19.1
 tiktoken>=0.5.2
+pypdf>=3.17.1
