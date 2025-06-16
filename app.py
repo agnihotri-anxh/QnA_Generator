@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Form, Request, Response, File, HTTPException, status, UploadFile
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.encoders import jsonable_encoder
@@ -61,44 +61,34 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/upload")
-async def upload_file(
-    request: Request,
-    file: UploadFile = File(...),
-    filename: Optional[str] = Form(None)
-):
+async def upload_file(file: UploadFile = File(...)):
     try:
-        logger.debug(f"Received file upload request: {file.filename}")
-        
-        # Use provided filename or original filename
-        save_filename = filename if filename else file.filename
-        
         # Validate file type
-        allowed_extensions = {'.pdf', '.docx', '.doc', '.pptx', '.ppt'}
-        file_ext = os.path.splitext(save_filename)[1].lower()
-        if file_ext not in allowed_extensions:
+        if not file.filename.lower().endswith(('.pdf', '.docx')):
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid file type. Please upload a PDF, Word, or PowerPoint file."
+                status_code=400,
+                detail="Only PDF and DOCX files are allowed"
             )
 
+        # Create uploads directory if it doesn't exist
+        os.makedirs("uploads", exist_ok=True)
+        
         # Save the file
-        pdf_filename = os.path.join(DOCS_DIR, save_filename)
-        async with aiofiles.open(pdf_filename, 'wb') as f:
+        file_path = os.path.join("uploads", file.filename)
+        with open(file_path, "wb") as buffer:
             content = await file.read()
-            await f.write(content)
+            buffer.write(content)
         
-        logger.info(f"File saved successfully: {pdf_filename}")
-        
-        return {
+        return JSONResponse(content={
             "msg": "success",
-            "pdf_filename": pdf_filename
-        }
+            "pdf_filename": file.filename
+        })
         
     except Exception as e:
         logger.error(f"Error uploading file: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=500,
+            detail=f"Error uploading file: {str(e)}"
         )
 
 def get_csv(file_path: str) -> tuple[str, list[dict], list[str]]:
@@ -139,47 +129,42 @@ def get_csv(file_path: str) -> tuple[str, list[dict], list[str]]:
         )
 
 @app.post("/analyze")
-async def analyze_document(request: Request, pdf_filename: str = Form(...)):
+async def analyze_document(pdf_filename: str = Form(...)):
     try:
-        logger.info(f"Starting document analysis for: {pdf_filename}")
-        
         # Validate file exists
-        if not os.path.exists(pdf_filename):
+        file_path = os.path.join("uploads", pdf_filename)
+        if not os.path.exists(file_path):
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="File not found"
+                status_code=404,
+                detail=f"File {pdf_filename} not found"
             )
+
+        # Generate CSV and get content
+        csv_filename = generate_csv(file_path)
+        content = get_document_content(file_path)
         
-        # Generate CSV file and get content
-        try:
-            output_file, qa_list, content_sections = get_csv(pdf_filename)
-            
-            if not qa_list:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="No questions and answers were generated"
-                )
-            
-            return {
-                "output_file": output_file,
-                "qa_list": qa_list,
-                "document_content": content_sections
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in document analysis: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error analyzing document: {str(e)}"
-            )
+        # Generate Q&A pairs
+        qa_list = generate_qa_pairs(content)
         
-    except HTTPException:
-        raise
+        # Ensure all data is JSON serializable
+        response_data = {
+            "qa_list": [
+                {
+                    "question": str(qa["question"]),
+                    "answer": str(qa["answer"])
+                }
+                for qa in qa_list
+            ],
+            "document_content": [str(section) for section in content]
+        }
+        
+        return JSONResponse(content=response_data)
+        
     except Exception as e:
-        logger.error(f"Unexpected error in analyze_document: {str(e)}")
+        logger.error(f"Error analyzing document: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request"
+            status_code=500,
+            detail=f"Error analyzing document: {str(e)}"
         )
 
 @app.get("/download/{filename}")

@@ -440,154 +440,115 @@
         }
 
         async function uploadFile(file) {
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('filename', file.name);
-
             try {
-                document.getElementById('loading').style.display = 'block';
-                document.getElementById('results').style.display = 'none';
-
+                showLoading();
+                const formData = new FormData();
+                formData.append('file', file);
+                
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData
                 });
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Upload failed');
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    throw new Error('Server returned invalid response format');
                 }
 
-                const result = await response.json();
-                if (result.msg === 'success') {
-                    // Show success toast
-                    const toast = new bootstrap.Toast(document.getElementById('uploadToast'));
-                    toast.show();
-                    
-                    currentFileType = file.type;
-                    await analyzeDocument(result.pdf_filename);
-                } else {
-                    throw new Error(result.error || 'Upload failed');
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Error uploading file');
                 }
+
+                if (!data.pdf_filename) {
+                    throw new Error('Invalid response: missing file information');
+                }
+
+                // Start analysis
+                await analyzeDocument(data.pdf_filename);
+                
             } catch (error) {
                 console.error('Upload error:', error);
-                alert('Error uploading file: ' + error.message);
-                document.getElementById('loading').style.display = 'none';
+                hideLoading();
+                showToast(error.message || 'Error uploading file', 'error');
             }
         }
 
-        async function analyzeDocument(filePath) {
+        async function analyzeDocument(pdfFilename) {
             try {
-                console.log('Analyzing document:', filePath);
-                
-                // Show loading state
-                document.getElementById('loading').style.display = 'block';
-                document.getElementById('results').style.display = 'none';
-                
                 const formData = new FormData();
-                formData.append('pdf_filename', filePath);
-                
+                formData.append('pdf_filename', pdfFilename);
+
                 const response = await fetch('/analyze', {
                     method: 'POST',
                     body: formData
                 });
+
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    throw new Error('Server returned invalid response format');
+                }
+
+                const data = await response.json();
                 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Analysis failed');
+                    throw new Error(data.detail || 'Error analyzing document');
                 }
-                
-                const result = await response.json();
-                console.log('Analysis result:', result);
-                
-                if (!result.output_file) {
-                    throw new Error('Analysis failed: No output file generated');
+
+                if (!data || !data.qa_list) {
+                    throw new Error('Invalid response format');
                 }
+
+                // Display Q&A pairs
+                const qaContainer = document.getElementById('qaContainer');
+                qaContainer.innerHTML = '';
                 
-                // Display results
-                displayResults(result.qa_list, result.document_content);
-                
-                // Set up download link
-                const downloadLink = document.getElementById('downloadLink');
-                downloadLink.href = `/download/${result.output_file}`;
-                downloadLink.style.display = 'block';
-                
+                data.qa_list.forEach((qa, index) => {
+                    const card = document.createElement('div');
+                    card.className = 'question-card';
+                    card.innerHTML = `
+                        <div class="question-text">${index + 1}. ${qa.question}</div>
+                        <div class="answer-text">${qa.answer}</div>
+                    `;
+                    qaContainer.appendChild(card);
+                });
+
+                // Display document content if available
+                if (data.document_content && data.document_content.length > 0) {
+                    const contentContainer = document.getElementById('documentContent');
+                    contentContainer.innerHTML = '<h3 class="section-title">Document Content</h3>';
+                    const contentList = document.createElement('ul');
+                    contentList.className = 'content-list';
+                    
+                    data.document_content.forEach(section => {
+                        const li = document.createElement('li');
+                        li.textContent = section;
+                        contentList.appendChild(li);
+                    });
+                    
+                    contentContainer.appendChild(contentList);
+                }
+
+                hideLoading();
+                showToast('Document analyzed successfully!', 'success');
             } catch (error) {
-                console.error('Error analyzing document:', error);
-                alert('Error analyzing document: ' + error.message);
-            } finally {
-                document.getElementById('loading').style.display = 'none';
+                console.error('Analysis error:', error);
+                hideLoading();
+                showToast(error.message || 'Error analyzing document', 'error');
             }
         }
 
-        function displayResults(qaList, documentContent) {
-            const resultsDiv = document.getElementById('results');
-            const qaListDiv = document.getElementById('qaList');
-            const documentContentDiv = document.getElementById('document-content');
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('uploadToast');
+            const toastBody = toast.querySelector('.toast-body');
+            const toastIcon = toast.querySelector('.fas');
             
-            // Clear previous results
-            qaListDiv.innerHTML = '';
+            toastBody.textContent = message;
+            toastIcon.className = type === 'success' ? 'fas fa-check-circle text-success me-2' : 'fas fa-exclamation-circle text-danger me-2';
             
-            // Display document content
-            if (documentContent && documentContent.length > 0) {
-                const contentList = document.createElement('ul');
-                contentList.className = 'content-list';
-                
-                documentContent.forEach((section, index) => {
-                    const listItem = document.createElement('li');
-                    listItem.textContent = section;
-                    contentList.appendChild(listItem);
-                });
-                
-                documentContentDiv.innerHTML = `
-                    <h3 class="section-title">Document Content</h3>
-                    <div class="document-preview">
-                        <div class="content-section">
-                            ${contentList.outerHTML}
-                        </div>
-                    </div>
-                `;
-            }
-            
-            // Display Q&A pairs
-            if (qaList && qaList.length > 0) {
-                let hasRateLimitError = false;
-                
-                qaList.forEach((qa, index) => {
-                    const qaDiv = document.createElement('div');
-                    qaDiv.className = 'question-card';
-                    
-                    // Check for rate limit error
-                    if (qa.answer.includes('rate limit') || qa.answer.includes('token limit')) {
-                        hasRateLimitError = true;
-                        qaDiv.classList.add('rate-limit-error');
-                    }
-                    
-                    qaDiv.innerHTML = `
-                        <div class="question-text">Q${index + 1}: ${qa.question}</div>
-                        <div class="answer-text">A${index + 1}: ${qa.answer}</div>
-                    `;
-                    qaListDiv.appendChild(qaDiv);
-                });
-                
-                // Add rate limit warning if needed
-                if (hasRateLimitError) {
-                    const warningDiv = document.createElement('div');
-                    warningDiv.className = 'alert alert-warning mt-3';
-                    warningDiv.innerHTML = `
-                        <i class="fas fa-exclamation-triangle me-2"></i>
-                        <strong>Note:</strong> Some answers could not be generated due to API rate limits. 
-                        Please try again later or consider upgrading your API tier.
-                    `;
-                    qaListDiv.insertBefore(warningDiv, qaListDiv.firstChild);
-                }
-            } else {
-                qaListDiv.innerHTML = '<p class="text-muted">No questions and answers were generated.</p>';
-            }
-            
-            // Show results
-            resultsDiv.style.display = 'block';
-            document.getElementById('loading').style.display = 'none';
+            const bsToast = new bootstrap.Toast(toast);
+            bsToast.show();
         }
 
         // PDF Viewer Functions
