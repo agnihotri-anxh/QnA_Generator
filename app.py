@@ -1,20 +1,22 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, Form, Request, Response, File, HTTPException, status, UploadFile
+from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.requests import Request
-from pathlib import Path
-import shutil
-import os
-import logging
+from fastapi.encoders import jsonable_encoder
 import uvicorn
-from datetime import datetime
-from src.helper import file_processing, llm_pipeline
-from fastapi.middleware.cors import CORSMiddleware
+import os
+import aiofiles
+import json
+import csv
+from src.helper import llm_pipeline
+import logging
+from pathlib import Path
+from typing import Optional
+from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, UnstructuredPowerPointLoader
 
-# Configure logging with more detailed format
+# Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
@@ -23,18 +25,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="QA Generator API")
+app = FastAPI(debug=True)  # Enable debug mode
 
-# Add CORS middleware with specific origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Create necessary directories with absolute paths
+# Create necessary directories
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 DOCS_DIR = STATIC_DIR / "docs"
@@ -44,134 +37,158 @@ for directory in [DOCS_DIR, OUTPUT_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
     logger.info(f"Created directory: {directory}")
 
-# Mount static directories
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Templates
 templates = Jinja2Templates(directory="templates")
 
+def get_document_loader(file_path: str):
+    """Get the appropriate document loader based on file extension."""
+    file_ext = os.path.splitext(file_path)[1].lower()
+    if file_ext == '.pdf':
+        return PyPDFLoader(file_path)
+    elif file_ext in ['.docx', '.doc']:
+        return UnstructuredWordDocumentLoader(file_path)
+    elif file_ext in ['.pptx', '.ppt']:
+        return UnstructuredPowerPointLoader(file_path)
+    else:
+        raise ValueError(f"Unsupported file type: {file_ext}")
+
 @app.get("/")
 async def index(request: Request):
+    logger.debug("Accessing index page")
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    filename: Optional[str] = Form(None)
+):
     try:
+        logger.debug(f"Received file upload request: {file.filename}")
+        
+        # Use provided filename or original filename
+        save_filename = filename if filename else file.filename
+        
         # Validate file type
-        allowed_types = {
-            'application/pdf': '.pdf',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx'
+        allowed_extensions = {'.pdf', '.docx', '.doc', '.pptx', '.ppt'}
+        file_ext = os.path.splitext(save_filename)[1].lower()
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid file type. Please upload a PDF, Word, or PowerPoint file."
+            )
+
+        # Save the file
+        pdf_filename = os.path.join(DOCS_DIR, save_filename)
+        async with aiofiles.open(pdf_filename, 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+        
+        logger.info(f"File saved successfully: {pdf_filename}")
+        
+        return {
+            "msg": "success",
+            "pdf_filename": pdf_filename
         }
         
-        if file.content_type not in allowed_types:
-            raise HTTPException(status_code=400, detail="Invalid file type. Please upload a PDF, Word, or PowerPoint file.")
-        
-        # Check file size (limit to 10MB)
-        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB in bytes
-        file_size = 0
-        chunk_size = 8192  # 8KB chunks
-        
-        # Read file in chunks to check size
-        while chunk := await file.read(chunk_size):
-            file_size += len(chunk)
-            if file_size > MAX_FILE_SIZE:
-                raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
-        
-        # Reset file pointer
-        await file.seek(0)
-        
-        # Create a unique filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        extension = allowed_types[file.content_type]
-        filename = f"{timestamp}_{file.filename}"
-        file_path = DOCS_DIR / filename
-        
-        # Save the file in chunks
-        try:
-            with file_path.open("wb") as buffer:
-                while chunk := await file.read(chunk_size):
-                    buffer.write(chunk)
-            logger.info(f"File uploaded successfully: {filename}")
-        except Exception as e:
-            logger.error(f"Error saving file: {str(e)}")
-            raise HTTPException(status_code=500, detail="Error saving file")
-        finally:
-            # Clean up
-            await file.close()
-        
-        return JSONResponse(content={"success": True, "file_path": str(file_path)})
-    
     except Exception as e:
         logger.error(f"Error uploading file: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+def get_csv(file_path: str) -> tuple[str, list[dict], list[str]]:
+    """Generate CSV file from Q&A pairs and return document content."""
+    try:
+        logger.info(f"Starting CSV generation for file: {file_path}")
+        
+        # Get Q&A pairs from LLM pipeline
+        output_file, qa_list = llm_pipeline(file_path)
+        
+        # Extract document content
+        loader = get_document_loader(file_path)
+        documents = loader.load()
+        content_sections = []
+        
+        for doc in documents:
+            # Split content into sections (e.g., by paragraphs)
+            sections = [section.strip() for section in doc.page_content.split('\n\n') if section.strip()]
+            content_sections.extend(sections)
+        
+        # Generate CSV file
+        output_path = OUTPUT_DIR / "QA.csv"
+        with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
+            csv_writer = csv.writer(csvfile)
+            csv_writer.writerow(["Question", "Answer"])
+            
+            for qa in qa_list:
+                csv_writer.writerow([qa["question"], qa["answer"]])
+        
+        logger.info(f"CSV file generated successfully: {output_path}")
+        return str(output_path), qa_list, content_sections
+        
+    except Exception as e:
+        logger.error(f"Error generating CSV: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating CSV: {str(e)}"
+        )
 
 @app.post("/analyze")
-async def analyze_document(file_path: str = Form(...)):
+async def analyze_document(request: Request, pdf_filename: str = Form(...)):
     try:
-        # Add detailed logging
-        logger.info(f"Starting document analysis for path: {file_path}")
-        logger.info(f"File exists: {os.path.exists(file_path)}")
-        logger.info(f"File size: {os.path.getsize(file_path) if os.path.exists(file_path) else 'N/A'}")
-        logger.info(f"GROQ_API_KEY is set: {bool(os.getenv('GROQ_API_KEY'))}")
+        logger.info(f"Starting document analysis for: {pdf_filename}")
         
-        # Validate file path
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="File not found")
-            
-        # Process the document
-        logger.info(f"Starting document analysis for: {file_path}")
-        try:
-            processed_chunks = file_processing(file_path)
-            if not processed_chunks:
-                raise HTTPException(status_code=400, detail="No content could be extracted from the document")
-        except Exception as e:
-            logger.error(f"Error in file processing: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
+        # Validate file exists
+        if not os.path.exists(pdf_filename):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found"
+            )
         
-        # Generate Q&A
-        logger.info("Starting Q&A generation")
-        try:
-            output_file, qa_list = llm_pipeline(processed_chunks, file_path)
-        except Exception as e:
-            logger.error(f"Error in LLM pipeline: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error generating Q&A: {str(e)}")
+        # Generate CSV file and get content
+        output_file, qa_list, content_sections = get_csv(pdf_filename)
         
-        # Clean up processed chunks
-        del processed_chunks
-        import gc
-        gc.collect()
-        
-        logger.info(f"Document analyzed successfully: {file_path}")
-        return JSONResponse(content={
-            "success": True,
+        return {
+            "output_file": output_file,
             "qa_list": qa_list,
-            "csv_path": output_file,
-            "document_content": processed_chunks,
-            "file_name": os.path.basename(file_path)
-        })
-    
+            "document_content": content_sections
+        }
+        
     except Exception as e:
-        error_msg = f"Error analyzing document: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        raise HTTPException(status_code=500, detail=error_msg)
+        logger.error(f"Error analyzing document: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    file_path = OUTPUT_DIR / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(file_path, filename=filename)
+    try:
+        file_path = OUTPUT_DIR / filename
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found"
+            )
+        return FileResponse(file_path, filename=filename)
+    except Exception as e:
+        logger.error(f"Error downloading file: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
 
 if __name__ == "__main__":
-    # Get port from environment variable or default to 8000
-    port = int(os.getenv("PORT", 8000))
-    # Use localhost for local development, 0.0.0.0 for production
-    host = os.getenv("HOST", "127.0.0.1")
-    
+    logger.info("Starting server...")
     uvicorn.run(
         "app:app",
-        host=host,
-        port=port,
-        reload=True  # Enable reload for local development
+        host="127.0.0.1",  # Changed from 0.0.0.0 to localhost
+        port=8080,
+        reload=True,
+        log_level="debug"
     )

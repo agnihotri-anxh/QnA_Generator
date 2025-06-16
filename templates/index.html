@@ -128,19 +128,63 @@
             height: 800px;
             border: 1px solid #dee2e6;
             border-radius: 5px;
+            background: #f8f9fa;
         }
         .pdf-controls {
             margin-bottom: 1rem;
             display: flex;
             gap: 0.5rem;
             align-items: center;
+            background: #f8f9fa;
+            padding: 0.5rem;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
         }
         .pdf-controls button {
             padding: 0.25rem 0.5rem;
             font-size: 0.875rem;
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .pdf-controls button:hover {
+            background: #e9ecef;
         }
         .pdf-controls input {
             width: 60px;
+            text-align: center;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 0.25rem;
+        }
+        .pdf-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 0.5rem;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .pdf-toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .pdf-toolbar-separator {
+            width: 1px;
+            height: 24px;
+            background: #dee2e6;
+            margin: 0 0.5rem;
+        }
+        .zoom-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .zoom-percentage {
+            min-width: 60px;
             text-align: center;
         }
         .document-type-indicator {
@@ -151,6 +195,44 @@
             display: flex;
             align-items: center;
             gap: 0.5rem;
+        }
+        .content-section {
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        .content-list {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+        }
+        .content-list li {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .content-list li:last-child {
+            border-bottom: none;
+        }
+        .qa-section {
+            margin-top: 2rem;
+        }
+        .rate-limit-error {
+            border-left: 4px solid #ffc107;
+            background-color: #fff3cd;
+        }
+        .rate-limit-error .answer-text {
+            color: #856404;
+        }
+        .alert {
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .alert-warning {
+            background-color: #fff3cd;
+            border-color: #ffeeba;
+            color: #856404;
         }
     </style>
 </head>
@@ -232,26 +314,40 @@
                                 </div>
 
                                 <!-- PDF Viewer -->
-                                <div id="pdfViewerContainer" style="display: none;">
-                                    <div class="pdf-controls">
-                                        <button class="btn btn-outline-primary" onclick="prevPage()">
-                                            <i class="fas fa-chevron-left"></i>
-                                        </button>
-                                        <span>Page</span>
-                                        <input type="number" id="pageNumber" min="1" value="1" onchange="goToPage(this.value)">
-                                        <span>of</span>
-                                        <span id="pageCount">0</span>
-                                        <button class="btn btn-outline-primary" onclick="nextPage()">
-                                            <i class="fas fa-chevron-right"></i>
-                                        </button>
-                                        <button class="btn btn-outline-primary" onclick="zoomIn()">
-                                            <i class="fas fa-search-plus"></i>
-                                        </button>
-                                        <button class="btn btn-outline-primary" onclick="zoomOut()">
-                                            <i class="fas fa-search-minus"></i>
-                                        </button>
+                                <div class="pdf-container">
+                                    <div class="pdf-toolbar">
+                                        <div class="pdf-toolbar-group">
+                                            <button onclick="prevPage()" class="btn btn-sm btn-outline-secondary">
+                                                <i class="fas fa-chevron-left"></i>
+                                            </button>
+                                            <input type="number" id="currentPage" min="1" value="1" onchange="goToPage(this.value)">
+                                            <span>of</span>
+                                            <span id="totalPages">0</span>
+                                            <button onclick="nextPage()" class="btn btn-sm btn-outline-secondary">
+                                                <i class="fas fa-chevron-right"></i>
+                                            </button>
+                                        </div>
+                                        <div class="pdf-toolbar-separator"></div>
+                                        <div class="pdf-toolbar-group zoom-controls">
+                                            <button onclick="zoomOut()" class="btn btn-sm btn-outline-secondary">
+                                                <i class="fas fa-search-minus"></i>
+                                            </button>
+                                            <span class="zoom-percentage" id="zoomLevel">100%</span>
+                                            <button onclick="zoomIn()" class="btn btn-sm btn-outline-secondary">
+                                                <i class="fas fa-search-plus"></i>
+                                            </button>
+                                        </div>
+                                        <div class="pdf-toolbar-separator"></div>
+                                        <div class="pdf-toolbar-group">
+                                            <button onclick="rotateLeft()" class="btn btn-sm btn-outline-secondary">
+                                                <i class="fas fa-undo"></i>
+                                            </button>
+                                            <button onclick="rotateRight()" class="btn btn-sm btn-outline-secondary">
+                                                <i class="fas fa-redo"></i>
+                                            </button>
+                                        </div>
                                     </div>
-                                    <canvas id="pdfViewer"></canvas>
+                                    <div id="pdfViewer"></div>
                                 </div>
 
                                 <!-- Text Content Viewer -->
@@ -277,6 +373,16 @@
         let currentPage = 1;
         let currentScale = 1.0;
         let currentFileType = '';
+        let pdfDoc = null;
+        let pageNum = 1;
+        let pageRendering = false;
+        let pageNumPending = null;
+        let scale = 1.0;
+        let rotation = 0;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const pdfViewer = document.getElementById('pdfViewer');
+        pdfViewer.appendChild(canvas);
 
         // File Upload Handling
         const dropZone = document.getElementById('dropZone');
@@ -336,6 +442,7 @@
         async function uploadFile(file) {
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('filename', file.name);
 
             try {
                 document.getElementById('loading').style.display = 'block';
@@ -347,17 +454,18 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error('Upload failed');
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Upload failed');
                 }
 
                 const result = await response.json();
-                if (result.success) {
+                if (result.msg === 'success') {
                     // Show success toast
                     const toast = new bootstrap.Toast(document.getElementById('uploadToast'));
                     toast.show();
                     
                     currentFileType = file.type;
-                    await analyzeDocument(result.file_path);
+                    await analyzeDocument(result.pdf_filename);
                 } else {
                     throw new Error(result.error || 'Upload failed');
                 }
@@ -370,166 +478,231 @@
 
         async function analyzeDocument(filePath) {
             try {
+                console.log('Analyzing document:', filePath);
+                
+                // Show loading state
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('results').style.display = 'none';
+                
+                const formData = new FormData();
+                formData.append('pdf_filename', filePath);
+                
                 const response = await fetch('/analyze', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: `file_path=${encodeURIComponent(filePath)}`
+                    body: formData
                 });
-
+                
                 if (!response.ok) {
-                    throw new Error('Analysis failed');
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Analysis failed');
                 }
-
+                
                 const result = await response.json();
-                if (result.success) {
-                    displayResults(result.qa_list, result.csv_path, result.document_content, filePath);
-                } else {
-                    throw new Error(result.error || 'Analysis failed');
+                console.log('Analysis result:', result);
+                
+                if (!result.output_file) {
+                    throw new Error('Analysis failed: No output file generated');
                 }
+                
+                // Display results
+                displayResults(result.qa_list, result.document_content);
+                
+                // Set up download link
+                const downloadLink = document.getElementById('downloadLink');
+                downloadLink.href = `/download/${result.output_file}`;
+                downloadLink.style.display = 'block';
+                
             } catch (error) {
-                console.error('Analysis error:', error);
+                console.error('Error analyzing document:', error);
                 alert('Error analyzing document: ' + error.message);
             } finally {
                 document.getElementById('loading').style.display = 'none';
             }
         }
 
-        function displayResults(qaList, csvPath, documentContent, filePath) {
+        function displayResults(qaList, documentContent) {
             const resultsDiv = document.getElementById('results');
             const qaListDiv = document.getElementById('qaList');
-            const downloadLink = document.getElementById('downloadLink');
-            const documentAccordion = document.getElementById('documentAccordion');
-            const pdfViewerContainer = document.getElementById('pdfViewerContainer');
-            const textContentViewer = document.getElementById('textContentViewer');
-            const docTypeIndicator = document.getElementById('docTypeIndicator');
-            const docTypeText = document.getElementById('docTypeText');
-
-            // Display Q&A
+            const documentContentDiv = document.getElementById('document-content');
+            
+            // Clear previous results
             qaListDiv.innerHTML = '';
-            qaList.forEach(qa => {
-                const card = document.createElement('div');
-                card.className = 'question-card';
-                card.innerHTML = `
-                    <div class="question-text">${qa.question}</div>
-                    <div class="answer-text">${qa.answer}</div>
-                `;
-                qaListDiv.appendChild(card);
-            });
-
-            // Set document type indicator and file name
-            const fileName = filePath.split('/').pop();
-            if (currentFileType === 'application/pdf') {
-                docTypeText.innerHTML = `<i class="fas fa-file-pdf"></i> PDF Document: ${fileName}`;
-                pdfViewerContainer.style.display = 'block';
-                textContentViewer.style.display = 'none';
-                loadPDF(filePath);
-            } else {
-                docTypeText.innerHTML = `<i class="fas fa-file-alt"></i> Document: ${fileName}`;
-                pdfViewerContainer.style.display = 'none';
-                textContentViewer.style.display = 'block';
+            
+            // Display document content
+            if (documentContent && documentContent.length > 0) {
+                const contentList = document.createElement('ul');
+                contentList.className = 'content-list';
                 
-                // Display document content
-                documentAccordion.innerHTML = '';
-                if (documentContent && documentContent.length > 0) {
-                    documentContent.forEach((section, index) => {
-                        const accordionItem = document.createElement('div');
-                        accordionItem.className = 'accordion-item';
-                        accordionItem.innerHTML = `
-                            <h2 class="accordion-header" id="heading${index}">
-                                <button class="accordion-button ${index === 0 ? '' : 'collapsed'}" type="button" 
-                                        data-bs-toggle="collapse" data-bs-target="#collapse${index}">
-                                    Section ${index + 1}
-                                </button>
-                            </h2>
-                            <div id="collapse${index}" class="accordion-collapse collapse ${index === 0 ? 'show' : ''}" 
-                                 data-bs-parent="#documentAccordion">
-                                <div class="accordion-body">
-                                    <div class="document-content">${section}</div>
-                                </div>
-                            </div>
-                        `;
-                        documentAccordion.appendChild(accordionItem);
-                    });
-                } else {
-                    documentAccordion.innerHTML = '<p class="text-muted">No document content available.</p>';
-                }
+                documentContent.forEach((section, index) => {
+                    const listItem = document.createElement('li');
+                    listItem.textContent = section;
+                    contentList.appendChild(listItem);
+                });
+                
+                documentContentDiv.innerHTML = `
+                    <h3 class="section-title">Document Content</h3>
+                    <div class="document-preview">
+                        <div class="content-section">
+                            ${contentList.outerHTML}
+                        </div>
+                    </div>
+                `;
             }
-
-            downloadLink.href = csvPath;
+            
+            // Display Q&A pairs
+            if (qaList && qaList.length > 0) {
+                let hasRateLimitError = false;
+                
+                qaList.forEach((qa, index) => {
+                    const qaDiv = document.createElement('div');
+                    qaDiv.className = 'question-card';
+                    
+                    // Check for rate limit error
+                    if (qa.answer.includes('rate limit') || qa.answer.includes('token limit')) {
+                        hasRateLimitError = true;
+                        qaDiv.classList.add('rate-limit-error');
+                    }
+                    
+                    qaDiv.innerHTML = `
+                        <div class="question-text">Q${index + 1}: ${qa.question}</div>
+                        <div class="answer-text">A${index + 1}: ${qa.answer}</div>
+                    `;
+                    qaListDiv.appendChild(qaDiv);
+                });
+                
+                // Add rate limit warning if needed
+                if (hasRateLimitError) {
+                    const warningDiv = document.createElement('div');
+                    warningDiv.className = 'alert alert-warning mt-3';
+                    warningDiv.innerHTML = `
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Note:</strong> Some answers could not be generated due to API rate limits. 
+                        Please try again later or consider upgrading your API tier.
+                    `;
+                    qaListDiv.insertBefore(warningDiv, qaListDiv.firstChild);
+                }
+            } else {
+                qaListDiv.innerHTML = '<p class="text-muted">No questions and answers were generated.</p>';
+            }
+            
+            // Show results
             resultsDiv.style.display = 'block';
+            document.getElementById('loading').style.display = 'none';
         }
 
         // PDF Viewer Functions
-        async function loadPDF(filePath) {
-            try {
-                // Convert file path to URL
-                const fileName = filePath.split('/').pop();
-                const pdfUrl = `/static/docs/${fileName}`;
-                
-                const loadingTask = pdfjsLib.getDocument(pdfUrl);
-                currentPdfDoc = await loadingTask.promise;
-                document.getElementById('pageCount').textContent = currentPdfDoc.numPages;
-                renderPage(1);
-            } catch (error) {
-                console.error('Error loading PDF:', error);
-                // Don't show alert, just log the error
-                console.log('Error loading PDF document');
-            }
-        }
-
-        async function renderPage(pageNumber) {
-            try {
-                const page = await currentPdfDoc.getPage(pageNumber);
-                const canvas = document.getElementById('pdfViewer');
-                const context = canvas.getContext('2d');
-
-                const viewport = page.getViewport({ scale: currentScale });
+        function renderPage(num) {
+            pageRendering = true;
+            pdfDoc.getPage(num).then(function(page) {
+                const viewport = page.getViewport({scale: scale, rotation: rotation});
                 canvas.height = viewport.height;
                 canvas.width = viewport.width;
 
                 const renderContext = {
-                    canvasContext: context,
+                    canvasContext: ctx,
                     viewport: viewport
                 };
+                const renderTask = page.render(renderContext);
 
-                await page.render(renderContext).promise;
-                currentPage = pageNumber;
-                document.getElementById('pageNumber').value = pageNumber;
-            } catch (error) {
-                console.error('Error rendering page:', error);
+                renderTask.promise.then(function() {
+                    pageRendering = false;
+                    if (pageNumPending !== null) {
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+                    }
+                });
+            });
+
+            document.getElementById('currentPage').value = num;
+        }
+
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
             }
         }
 
         function prevPage() {
-            if (currentPage > 1) {
-                renderPage(currentPage - 1);
+            if (pageNum <= 1) {
+                return;
             }
+            pageNum--;
+            queueRenderPage(pageNum);
         }
 
         function nextPage() {
-            if (currentPage < currentPdfDoc.numPages) {
-                renderPage(currentPage + 1);
+            if (pageNum >= pdfDoc.numPages) {
+                return;
             }
+            pageNum++;
+            queueRenderPage(pageNum);
         }
 
-        function goToPage(pageNumber) {
-            const page = parseInt(pageNumber);
-            if (page >= 1 && page <= currentPdfDoc.numPages) {
-                renderPage(page);
+        function goToPage(num) {
+            num = parseInt(num);
+            if (num < 1 || num > pdfDoc.numPages) {
+                return;
             }
+            pageNum = num;
+            queueRenderPage(pageNum);
         }
 
         function zoomIn() {
-            currentScale *= 1.2;
-            renderPage(currentPage);
+            scale *= 1.2;
+            queueRenderPage(pageNum);
+            updateZoomDisplay();
         }
 
         function zoomOut() {
-            currentScale /= 1.2;
-            renderPage(currentPage);
+            scale /= 1.2;
+            queueRenderPage(pageNum);
+            updateZoomDisplay();
         }
+
+        function rotateLeft() {
+            rotation = (rotation - 90) % 360;
+            queueRenderPage(pageNum);
+        }
+
+        function rotateRight() {
+            rotation = (rotation + 90) % 360;
+            queueRenderPage(pageNum);
+        }
+
+        function updateZoomDisplay() {
+            document.getElementById('zoomLevel').textContent = Math.round(scale * 100) + '%';
+        }
+
+        function loadPDF(url) {
+            pdfjsLib.getDocument(url).promise.then(function(pdfDoc_) {
+                pdfDoc = pdfDoc_;
+                document.getElementById('totalPages').textContent = pdfDoc.numPages;
+                renderPage(pageNum);
+            });
+        }
+
+        // Add keyboard navigation
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowLeft') {
+                prevPage();
+            } else if (e.key === 'ArrowRight') {
+                nextPage();
+            }
+        });
+
+        // Add mouse wheel zoom
+        pdfViewer.addEventListener('wheel', function(e) {
+            if (e.ctrlKey) {
+                e.preventDefault();
+                if (e.deltaY < 0) {
+                    zoomIn();
+                } else {
+                    zoomOut();
+                }
+            }
+        });
     </script>
 </body>
 </html>

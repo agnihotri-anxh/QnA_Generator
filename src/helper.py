@@ -1,6 +1,6 @@
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, UnstructuredPowerPointLoader
 from langchain.docstore.document import Document
-from langchain.text_splitter import CharacterTextSplitter
+from langchain.text_splitter import CharacterTextSplitter, TokenTextSplitter
 from langchain.prompts import PromptTemplate
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains.summarize import load_summarize_chain
@@ -14,10 +14,15 @@ from pathlib import Path
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Optional
 import re
 import time
 from itertools import chain
+from langchain_core.messages import HumanMessage, SystemMessage
+import tiktoken
+import gc
+from datetime import datetime, timedelta
+import json
 
 # Configure logging with more detailed format
 logging.basicConfig(
@@ -38,11 +43,15 @@ if not GROQ_API_KEY:
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 # Rate limiting settings
-RATE_LIMIT_DELAY = 2.0  # Increased base delay
-MAX_RETRIES = 3
-BATCH_SIZE = 2  # Reduced batch size
-MAX_TOKENS = 300  # Reduced max tokens per request
+RATE_LIMIT_DELAY = 5.0  # Increased base delay
+MAX_RETRIES = 5  # Increased retries
+BATCH_SIZE = 1  # Reduced batch size to minimize token usage
+MAX_TOKENS = 150  # Further reduced max tokens per request
 BACKOFF_FACTOR = 2.0  # Exponential backoff factor
+MAX_TOKENS_PER_DAY = 500000  # Groq's daily limit
+TOKEN_BUFFER = 1000  # Buffer to prevent hitting limit
+TOKEN_USAGE_FILE = "token_usage.json"
+DAILY_TOKEN_LIMIT = 500000
 
 def get_backoff_delay(attempt: int) -> float:
     """Calculate exponential backoff delay."""
@@ -80,32 +89,91 @@ def clean_text(text: str) -> str:
         logger.error(f"Error in clean_text: {str(e)}")
         return ""
 
+def estimate_tokens(text: str) -> int:
+    """Estimate the number of tokens in a text string."""
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
+    except Exception as e:
+        logger.warning(f"Error estimating tokens: {str(e)}")
+        return len(text.split()) * 1.3  # Rough estimate as fallback
+
+def check_token_limit(content: str, question: str) -> bool:
+    """Check if the request would exceed token limits."""
+    estimated_tokens = estimate_tokens(content) + estimate_tokens(question) + 100  # Add buffer for system message
+    return estimated_tokens <= (MAX_TOKENS - TOKEN_BUFFER)
+
+def load_token_usage():
+    """Load token usage from file."""
+    try:
+        if os.path.exists(TOKEN_USAGE_FILE):
+            with open(TOKEN_USAGE_FILE, 'r') as f:
+                return json.load(f)
+        return {"date": datetime.now().strftime("%Y-%m-%d"), "tokens_used": 0}
+    except Exception as e:
+        logger.error(f"Error loading token usage: {str(e)}")
+        return {"date": datetime.now().strftime("%Y-%m-%d"), "tokens_used": 0}
+
+def save_token_usage(usage_data):
+    """Save token usage to file."""
+    try:
+        with open(TOKEN_USAGE_FILE, 'w') as f:
+            json.dump(usage_data, f)
+    except Exception as e:
+        logger.error(f"Error saving token usage: {str(e)}")
+
+def check_token_limit():
+    """Check if we've hit the daily token limit."""
+    usage_data = load_token_usage()
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    # Reset counter if it's a new day
+    if usage_data["date"] != current_date:
+        usage_data = {"date": current_date, "tokens_used": 0}
+        save_token_usage(usage_data)
+    
+    return usage_data["tokens_used"] >= DAILY_TOKEN_LIMIT
+
+def update_token_usage(tokens_used):
+    """Update token usage count."""
+    usage_data = load_token_usage()
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    # Reset counter if it's a new day
+    if usage_data["date"] != current_date:
+        usage_data = {"date": current_date, "tokens_used": 0}
+    
+    usage_data["tokens_used"] += tokens_used
+    save_token_usage(usage_data)
+
 def process_batch(batch, llm, document_content=None):
     results = []
     for question in batch:
         try:
-            # Create a more structured prompt for better answer generation
-            prompt = f"""You are an expert in document analysis. Your task is to answer the following question based on the provided document content.
+            # Check token limits before processing
+            if check_token_limit():
+                logger.warning("Daily token limit reached")
+                results.append({
+                    "question": question,
+                    "answer": "Unable to generate answer due to daily token limit. Please try again tomorrow or upgrade your API tier."
+                })
+                continue
 
-Document Content:
-{document_content if document_content else "No document content provided."}
+            # Create a more structured prompt for better answer generation
+            prompt = f"""Answer this question based on the document:
+
+Document: {document_content if document_content else "No content provided."}
 
 Question: {question}
-
-Instructions:
-1. Provide a clear and concise answer based on the document content
-2. If the answer is not in the content, explicitly state "The answer is not available in the provided document content"
-3. Focus on accuracy and relevance
-4. Keep the answer concise but informative
 
 Answer:"""
             
             # Generate answer using ChatGroq with improved error handling
             try:
-                # Create a message for the LLM with system context
+                # Create messages using proper LangChain message types
                 messages = [
-                    {"role": "system", "content": "You are an expert in document analysis and question answering. Your responses should be accurate, concise, and based solely on the provided document content."},
-                    {"role": "user", "content": prompt}
+                    SystemMessage(content="You are a document analysis expert. Provide concise, accurate answers based only on the given content."),
+                    HumanMessage(content=prompt)
                 ]
                 
                 # Get response from LLM with improved retry mechanism
@@ -117,7 +185,13 @@ Answer:"""
                         error_msg = str(e)
                         if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
                             if attempt == MAX_RETRIES - 1:
-                                raise e
+                                # If we've exhausted all retries, return a rate limit message
+                                results.append({
+                                    "question": question,
+                                    "answer": "Unable to generate answer due to API rate limit. Please try again later or upgrade your API tier."
+                                })
+                                logger.warning(f"Rate limit reached after {MAX_RETRIES} attempts. Skipping remaining questions.")
+                                return results
                             backoff_delay = get_backoff_delay(attempt)
                             logger.warning(f"Rate limit hit, retrying in {backoff_delay:.2f} seconds (attempt {attempt + 1}/{MAX_RETRIES})")
                             time.sleep(backoff_delay)
@@ -145,6 +219,14 @@ Answer:"""
                     "answer": answer
                 })
                 
+                # After successful response, update token usage
+                if isinstance(response, dict) and 'usage' in response:
+                    update_token_usage(response['usage']['total_tokens'])
+                else:
+                    # Estimate token usage if not provided
+                    estimated_tokens = estimate_tokens(prompt) + estimate_tokens(str(response))
+                    update_token_usage(estimated_tokens)
+                
             except Exception as e:
                 logger.error(f"Error in LLM response processing: {str(e)}")
                 # Try alternative approach with simpler prompt
@@ -165,17 +247,34 @@ Answer:"""
                         })
                 except Exception as e2:
                     logger.error(f"Error in alternative LLM response processing: {str(e2)}")
-                    results.append({
-                        "question": question,
-                        "answer": "Error processing LLM response. Please try again."
-                    })
+                    if "rate_limit_exceeded" in str(e2).lower() or "429" in str(e2):
+                        results.append({
+                            "question": question,
+                            "answer": "Unable to generate answer due to API rate limit. Please try again later or upgrade your API tier."
+                        })
+                        logger.warning("Rate limit reached. Skipping remaining questions.")
+                        return results
+                    else:
+                        results.append({
+                            "question": question,
+                            "answer": "Error processing LLM response. Please try again."
+                        })
                 
         except Exception as e:
-            logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
-            results.append({
-                "question": question,
-                "answer": "Error generating answer. Please try again."
-            })
+            error_msg = str(e)
+            if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
+                logger.warning("Rate limit reached")
+                results.append({
+                    "question": question,
+                    "answer": "Unable to generate answer due to API rate limit. Please try again later or upgrade your API tier."
+                })
+                return results
+            else:
+                logger.error(f"Error generating answer for question: {question}. Error: {error_msg}")
+                results.append({
+                    "question": question,
+                    "answer": "Error generating answer. Please try again."
+                })
     return results
 
 def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, max_retries: int = MAX_RETRIES) -> str:
@@ -198,6 +297,9 @@ def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, 
             # Add more context to the prompt
             formatted_prompt = prompt.format(text=cleaned_chunk)
             logger.info(f"Formatted prompt length: {len(formatted_prompt)}")
+            
+            # Create proper message format for the chain
+            messages = [HumanMessage(content=formatted_prompt)]
             
             result = chain.invoke([Document(page_content=cleaned_chunk)])
             
@@ -228,204 +330,194 @@ def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, 
             logger.warning(f"Attempt {attempt + 1} failed, retrying... Error: {str(e)}")
             time.sleep(RATE_LIMIT_DELAY * (attempt + 1))
 
-def file_processing(file_path):
+def file_processing(file_path: str) -> Tuple[List[Document], List[Document]]:
+    """Process the input file and return documents for question and answer generation."""
     try:
         logger.info(f"Starting file processing for: {file_path}")
         
-        # Check if file exists
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
-            
-        # Check file size
-        file_size = os.path.getsize(file_path)
-        if file_size == 0:
-            raise ValueError(f"File is empty: {file_path}")
-            
-        logger.info(f"File size: {file_size} bytes")
-        
-        # Get document loader
-        loader = get_document_loader(file_path)
-        logger.info("Document loader created successfully")
-        
-        # Load document in smaller batches
-        logger.info("Loading document...")
-        data = []
-        batch_size = 5  # Process 5 pages at a time
-        
-        # Load and process in batches
-        for i in range(0, len(loader.load()), batch_size):
-            batch = loader.load()[i:i + batch_size]
-            processed_batch = []
-            
-            for page in batch:
-                # Clean and process each page
-                cleaned_text = clean_text(page.page_content)
-                if cleaned_text.strip():
-                    processed_batch.append(cleaned_text)
-            
-            # Combine batch results
-            data.extend(processed_batch)
-            
-            # Force garbage collection after each batch
-            import gc
-            gc.collect()
-        
-        if not data:
-            raise ValueError("No content extracted from document")
-            
-        logger.info(f"Document loaded successfully. Number of sections: {len(data)}")
-        
-        # Use smaller chunks for better processing
-        splitter = CharacterTextSplitter(
-            chunk_size=1000,  # Reduced chunk size
-            chunk_overlap=100,  # Reduced overlap
-            separator="\n"
+        # Load data from PDF
+        loader = PyPDFLoader(file_path)
+        data = loader.load()
+        logger.info(f"Document loaded successfully. Number of pages: {len(data)}")
+
+        # Combine all pages for question generation
+        question_gen = ''
+        for page in data:
+            question_gen += page.page_content
+
+        # Split text for question generation
+        splitter_ques_gen = TokenTextSplitter(
+            chunk_size=10000,
+            chunk_overlap=200
         )
-
-        # Process chunks in batches
-        all_chunks = []
-        for section in data:
-            section_chunks = splitter.split_text(section)
-            all_chunks.extend(section_chunks)
-            # Force garbage collection after each section
-            gc.collect()
+        chunks_ques_gen = splitter_ques_gen.split_text(question_gen)
+        document_ques_gen = [Document(page_content=t) for t in chunks_ques_gen]
+        logger.info(f"Text split into {len(document_ques_gen)} chunks for question generation")
         
-        logger.info(f"Text split into {len(all_chunks)} chunks")
-        
-        if not all_chunks:
-            raise ValueError("No chunks generated after text splitting")
+        # Split text for answer generation
+        splitter_ans_gen = TokenTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=100
+        )
+        document_answer_gen = splitter_ans_gen.split_documents(document_ques_gen)
+        logger.info(f"Text split into {len(document_answer_gen)} chunks for answer generation")
 
-        return all_chunks
+        return document_ques_gen, document_answer_gen
     
     except Exception as e:
         logger.error(f"Error in file processing: {str(e)}")
         raise Exception(f"Document analysis failed: {str(e)}")
 
-def llm_pipeline(chunks: List[str], file_path: str) -> Tuple[str, List[dict]]:
+def generate_csv(qa_list: List[dict], file_path: str) -> str:
+    """Generate a CSV file from the Q&A list."""
+    try:
+        output_path = Path("static/output") / f"{Path(file_path).stem}_QA.csv"
+        with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
+            import csv
+            csv_writer = csv.writer(csvfile)
+            csv_writer.writerow(["Question", "Answer"])
+            for qa in qa_list:
+                csv_writer.writerow([qa["question"], qa["answer"]])
+        return str(output_path)
+    except Exception as e:
+        logger.error(f"Error generating CSV file: {str(e)}")
+        raise Exception(f"Failed to generate CSV file: {str(e)}")
+
+def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
+    """Main pipeline for generating questions and answers."""
     try:
         logger.info("Starting LLM pipeline...")
         
-        # Process chunks in smaller batches to reduce memory usage
-        BATCH_SIZE = 2  # Reduced batch size
+        # Process the document
+        document_ques_gen, document_answer_gen = file_processing(file_path)
         
-        # Combine chunks for document content
-        document_content = "\n".join(chunks)
-        logger.info(f"Document content length: {len(document_content)} characters")
-        
-        # Initialize LLM with optimized settings
+        # Initialize LLM for question generation
         try:
-            logger.info("Initializing LLM...")
-            if not os.getenv("GROQ_API_KEY"):
-                raise ValueError("GROQ_API_KEY environment variable is not set")
-                
-            llm = ChatGroq(
-                groq_api_key=os.getenv("GROQ_API_KEY"),
+            logger.info("Initializing question generation LLM...")
+            llm_ques_gen = ChatGroq(
+                groq_api_key=GROQ_API_KEY,
                 model_name="gemma2-9b-it",
-                temperature=0.7,
-                max_tokens=MAX_TOKENS  # Use the new token limit
+                temperature=0.3,
+                max_tokens=MAX_TOKENS
             )
-            # Test the LLM connection
-            test_response = llm.invoke([{"role": "user", "content": "Test connection"}])
-            logger.info("LLM initialized and tested successfully")
+            logger.info("Question generation LLM initialized successfully")
         except Exception as e:
-            logger.error(f"Error initializing LLM: {str(e)}")
-            raise Exception(f"Failed to initialize LLM. Please check your GROQ_API_KEY and internet connection: {str(e)}")
+            logger.error(f"Error initializing question generation LLM: {str(e)}")
+            raise Exception(f"Failed to initialize LLM: {str(e)}")
 
-        # Create prompt template
+        # Create prompts for question generation
         try:
-            logger.info("Creating prompt template...")
-            prompt = PromptTemplate(
+            logger.info("Creating question generation prompts...")
+            PROMPT_QUESTIONS = PromptTemplate(
                 template=prompt_template,
                 input_variables=["text"]
             )
-            logger.info("Prompt template created successfully")
+            REFINE_PROMPT_QUESTIONS = PromptTemplate(
+                input_variables=["existing_answer", "text"],
+                template=refine_template
+            )
+            logger.info("Question generation prompts created successfully")
         except Exception as e:
-            logger.error(f"Failed to create prompt template: {str(e)}")
-            raise Exception(f"Failed to create prompt template: {str(e)}")
+            logger.error(f"Failed to create question generation prompts: {str(e)}")
+            raise Exception(f"Failed to create prompts: {str(e)}")
 
-        # Process chunks in smaller batches
-        all_questions = []
-        for i in range(0, len(chunks), BATCH_SIZE):
-            batch = chunks[i:i + BATCH_SIZE]
-            try:
-                with ThreadPoolExecutor(max_workers=1) as executor:  # Reduced workers
-                    futures = [executor.submit(process_chunk_with_retry, chunk, llm, prompt) for chunk in batch]
-                    results = [f.result() for f in futures]
+        # Generate questions
+        try:
+            logger.info("Generating questions...")
+            ques_gen_chain = load_summarize_chain(
+                llm=llm_ques_gen,
+                chain_type="refine",
+                verbose=True,
+                question_prompt=PROMPT_QUESTIONS,
+                refine_prompt=REFINE_PROMPT_QUESTIONS
+            )
+            
+            for attempt in range(MAX_RETRIES):
+                try:
+                    questions = ques_gen_chain.run(document_ques_gen)
+                    break
+                except Exception as e:
+                    if "rate_limit_exceeded" in str(e).lower() or "429" in str(e):
+                        if attempt == MAX_RETRIES - 1:
+                            raise Exception("Rate limit reached. Please try again later.")
+                        backoff_delay = get_backoff_delay(attempt)
+                        logger.warning(f"Rate limit hit, retrying in {backoff_delay:.2f} seconds")
+                        time.sleep(backoff_delay)
+                    else:
+                        raise e
+
+            # Process generated questions
+            ques_list = questions.split("\n")
+            filtered_ques_list = [q.strip() for q in ques_list if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
+            logger.info(f"Generated {len(filtered_ques_list)} questions")
                 
-                for result in results:
-                    if result:
-                        questions = result.split('\n')
-                        valid_questions = [q.strip() for q in questions if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
-                        all_questions.extend(valid_questions)
-                
-                # Force garbage collection after each batch
-                import gc
-                gc.collect()
-                
-            except Exception as e:
-                logger.error(f"Error processing batch {i//BATCH_SIZE + 1}: {str(e)}")
-                continue
+        except Exception as e:
+            logger.error(f"Error generating questions: {str(e)}")
+            raise Exception(f"Failed to generate questions: {str(e)}")
 
-        if not all_questions:
-            logger.error("No questions were generated from any chunk")
-            raise Exception("Failed to generate questions. No valid questions were generated from the input text.")
+        # Initialize embeddings and vector store
+        try:
+            logger.info("Initializing embeddings and vector store...")
+            embeddings = HuggingFaceEmbeddings()
+            vector_store = FAISS.from_documents(document_answer_gen, embeddings)
+            logger.info("Vector store created successfully")
+        except Exception as e:
+            logger.error(f"Error creating vector store: {str(e)}")
+            raise Exception(f"Failed to create vector store: {str(e)}")
 
-        # Get top 5 questions instead of 10 to reduce memory usage
-        display_questions = all_questions[:5]
-        logger.info(f"Generated {len(all_questions)} questions, displaying top {len(display_questions)}")
-
-        # Initialize answer generation with reduced memory usage
+        # Initialize answer generation
         try:
             logger.info("Initializing answer generation...")
-            answer_llm = ChatGroq(
-                groq_api_key=os.getenv("GROQ_API_KEY"),
+            llm_answer_gen = ChatGroq(
+                groq_api_key=GROQ_API_KEY,
                 model_name="gemma2-9b-it",
                 temperature=0.1,
-                max_tokens=MAX_TOKENS  # Use the new token limit
+                max_tokens=MAX_TOKENS
             )
-            logger.info("Answer LLM initialized successfully")
+            
+            answer_chain = RetrievalQA.from_chain_type(
+                llm=llm_answer_gen,
+                chain_type="stuff",
+                retriever=vector_store.as_retriever()
+            )
+            logger.info("Answer generation initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize answer LLM: {str(e)}")
-            raise Exception(f"Failed to initialize answer LLM: {str(e)}")
+            logger.error(f"Error initializing answer generation: {str(e)}")
+            raise Exception(f"Failed to initialize answer generation: {str(e)}")
 
-        # Process questions in smaller batches
-        qa_list = []
+        # Generate answers
         try:
-            logger.info("Processing questions in batches...")
-            for i in range(0, len(display_questions), BATCH_SIZE):
-                batch = display_questions[i:i + BATCH_SIZE]
-                logger.info(f"Processing batch {i//BATCH_SIZE + 1}")
-                batch_results = process_batch(batch, answer_llm, document_content)
-                qa_list.extend(batch_results)
-                # Force garbage collection after each batch
+            logger.info("Generating answers...")
+            qa_list = []
+            for question in filtered_ques_list:
+                try:
+                    answer = answer_chain.run(question)
+                    qa_list.append({
+                        "question": question,
+                        "answer": answer.strip()
+                    })
+                except Exception as e:
+                    logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
+                    qa_list.append({
+                        "question": question,
+                        "answer": "Error generating answer. Please try again."
+                    })
                 gc.collect()
-            logger.info(f"Successfully processed {len(qa_list)} questions")
+            logger.info(f"Generated answers for {len(qa_list)} questions")
         except Exception as e:
-            logger.error(f"Failed to process questions in batches: {str(e)}")
-            raise Exception(f"Failed to process questions: {str(e)}")
+            logger.error(f"Error in answer generation: {str(e)}")
+            raise Exception(f"Failed to generate answers: {str(e)}")
 
-        # Generate CSV file with reduced memory usage
+        # Generate CSV file
         try:
             logger.info("Generating CSV file...")
-            output_path = Path("static/output") / f"{Path(file_path).stem}_QA.csv"
-            with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
-                import csv
-                csv_writer = csv.writer(csvfile)
-                csv_writer.writerow(["Question", "Answer"])
-                
-                for i in range(0, len(all_questions), BATCH_SIZE):
-                    batch = all_questions[i:i + BATCH_SIZE]
-                    batch_results = process_batch(batch, answer_llm, document_content)
-                    for qa in batch_results:
-                        csv_writer.writerow([qa["question"], qa["answer"]])
-                    # Force garbage collection after each batch
-                    gc.collect()
-            logger.info(f"CSV file generated successfully at {output_path}")
+            output_file = generate_csv(qa_list, file_path)
+            logger.info(f"CSV file generated successfully at {output_file}")
         except Exception as e:
             logger.error(f"Failed to generate CSV file: {str(e)}")
             raise Exception(f"Failed to generate CSV file: {str(e)}")
 
-        return str(output_path), qa_list
+        return output_file, qa_list
 
     except Exception as e:
         logger.error(f"Error in LLM pipeline: {str(e)}")
