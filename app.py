@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, UnstructuredPowerPointLoader
+from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging
 logging.basicConfig(
@@ -27,13 +28,23 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(debug=True)  # Enable debug mode
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Create necessary directories
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 DOCS_DIR = STATIC_DIR / "docs"
 OUTPUT_DIR = STATIC_DIR / "output"
+UPLOAD_DIR = BASE_DIR / "uploads"
 
-for directory in [DOCS_DIR, OUTPUT_DIR]:
+for directory in [DOCS_DIR, OUTPUT_DIR, UPLOAD_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
     logger.info(f"Created directory: {directory}")
 
@@ -69,12 +80,9 @@ async def upload_file(file: UploadFile = File(...)):
                 status_code=400,
                 detail="Only PDF and DOCX files are allowed"
             )
-
-        # Create uploads directory if it doesn't exist
-        os.makedirs("uploads", exist_ok=True)
         
         # Save the file
-        file_path = os.path.join("uploads", file.filename)
+        file_path = UPLOAD_DIR / file.filename
         with open(file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
@@ -132,16 +140,16 @@ def get_csv(file_path: str) -> tuple[str, list[dict], list[str]]:
 async def analyze_document(pdf_filename: str = Form(...)):
     try:
         # Validate file exists
-        file_path = os.path.join("uploads", pdf_filename)
-        if not os.path.exists(file_path):
+        file_path = UPLOAD_DIR / pdf_filename
+        if not file_path.exists():
             raise HTTPException(
                 status_code=404,
                 detail=f"File {pdf_filename} not found"
             )
 
         # Generate CSV and get content
-        csv_filename = generate_csv(file_path)
-        content = get_document_content(file_path)
+        csv_filename = generate_csv(str(file_path))
+        content = get_document_content(str(file_path))
         
         # Generate Q&A pairs
         qa_list = generate_qa_pairs(content)
@@ -191,7 +199,7 @@ if __name__ == "__main__":
     logger.info(f"Server will be available at http://{host}:{port}")
     
     # Ensure directories exist
-    for directory in [DOCS_DIR, OUTPUT_DIR]:
+    for directory in [DOCS_DIR, OUTPUT_DIR, UPLOAD_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
         logger.info(f"Ensuring directory exists: {directory}")
     
