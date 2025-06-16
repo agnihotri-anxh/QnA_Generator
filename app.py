@@ -16,17 +16,14 @@ from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDo
 from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('app.log')
-    ]
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(debug=True)  # Enable debug mode
+# Get port from environment variable or use default
+PORT = int(os.getenv("PORT", 10000))
+logger.info(f"Starting server on port {PORT}")
+
+app = FastAPI()
 
 # Add CORS middleware
 app.add_middleware(
@@ -67,9 +64,12 @@ def get_document_loader(file_path: str):
         raise ValueError(f"Unsupported file type: {file_ext}")
 
 @app.get("/")
-async def index(request: Request):
-    logger.debug("Accessing index page")
-    return templates.TemplateResponse("index.html", {"request": request})
+async def read_root():
+    return templates.TemplateResponse("index.html", {"request": {}})
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -87,6 +87,7 @@ async def upload_file(file: UploadFile = File(...)):
             content = await file.read()
             buffer.write(content)
         
+        logger.info(f"File saved successfully: {file_path}")
         return JSONResponse(content={
             "msg": "success",
             "pdf_filename": file.filename
@@ -194,9 +195,8 @@ async def download_file(filename: str):
 
 if __name__ == "__main__":
     logger.info("Starting server...")
-    port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "127.0.0.1")
-    logger.info(f"Server will be available at http://{host}:{port}")
+    logger.info(f"Server will be available at http://{host}:{PORT}")
     
     # Ensure directories exist
     for directory in [DOCS_DIR, OUTPUT_DIR, UPLOAD_DIR]:
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app:app",
         host=host,
-        port=port,
+        port=PORT,
         reload=False,
         log_level="info"
     )
