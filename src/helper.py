@@ -356,13 +356,50 @@ def generate_csv(qa_list: List[dict], file_path: str) -> str:
         logger.error(f"Error generating CSV file: {str(e)}")
         raise Exception(f"Failed to generate CSV file: {str(e)}")
 
+def initialize_embeddings():
+    """Initialize embeddings with error handling and fallback."""
+    try:
+        logger.info("Initializing embeddings with all-MiniLM-L6-v2 model...")
+        embeddings = HuggingFaceEmbeddings(
+            model_name="all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+        return embeddings
+    except Exception as e:
+        logger.error(f"Error initializing embeddings: {str(e)}")
+        raise
+
+def create_vector_store(documents, embeddings):
+    """Create vector store with retry mechanism."""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Creating vector store (attempt {attempt + 1}/{max_retries})...")
+            vector_store = FAISS.from_documents(documents, embeddings)
+            logger.info("Vector store created successfully")
+            return vector_store
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"Failed to create vector store after {max_retries} attempts: {str(e)}")
+                raise
+            logger.warning(f"Attempt {attempt + 1} failed, retrying...")
+            time.sleep(2 ** attempt)  # Exponential backoff
+
 def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
-    """Main pipeline for generating questions and answers."""
+    """Main LLM pipeline with improved error handling."""
     try:
         logger.info("Starting LLM pipeline...")
         
-        # Process the document
-        document_ques_gen, document_answer_gen = file_processing(file_path)
+        # Process file
+        logger.info(f"Starting file processing for: {file_path}")
+        documents, chunks = file_processing(file_path)
+        
+        # Initialize embeddings
+        embeddings = initialize_embeddings()
+        
+        # Create vector store
+        vector_store = create_vector_store(documents, embeddings)
         
         # Initialize LLM for question generation
         try:
@@ -407,7 +444,7 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
             
             for attempt in range(MAX_RETRIES):
                 try:
-                    questions = ques_gen_chain.run(document_ques_gen)
+                    questions = ques_gen_chain.run(documents)
                     break
                 except Exception as e:
                     if "rate_limit_exceeded" in str(e).lower() or "429" in str(e):
@@ -427,16 +464,6 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
         except Exception as e:
             logger.error(f"Error generating questions: {str(e)}")
             raise Exception(f"Failed to generate questions: {str(e)}")
-
-        # Initialize embeddings and vector store
-        try:
-            logger.info("Initializing embeddings and vector store...")
-            embeddings = HuggingFaceEmbeddings()
-            vector_store = FAISS.from_documents(document_answer_gen, embeddings)
-            logger.info("Vector store created successfully")
-        except Exception as e:
-            logger.error(f"Error creating vector store: {str(e)}")
-            raise Exception(f"Failed to create vector store: {str(e)}")
 
         # Initialize answer generation
         try:

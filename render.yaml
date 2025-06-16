@@ -5,6 +5,7 @@ services:
     buildCommand: |
       pip install -r requirements.txt
       mkdir -p static/docs static/output
+      python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
@@ -13,5 +14,7 @@ services:
         sync: false
       - key: PORT
         value: 10000
+      - key: SENTENCE_TRANSFORMERS_HOME
+        value: /opt/render/project/src/.cache
     healthCheckPath: /
     autoDeploy: true 
