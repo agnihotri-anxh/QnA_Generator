@@ -2,8 +2,8 @@ from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDo
 from langchain.docstore.document import Document
 from langchain.text_splitter import CharacterTextSplitter, TokenTextSplitter
 from langchain.prompts import PromptTemplate
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains.summarize import load_summarize_chain
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 import os
