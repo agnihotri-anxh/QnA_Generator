@@ -6,19 +6,19 @@ These settings help manage memory usage and performance.
 import os
 
 # Memory Management Settings
-MAX_DOCUMENT_SIZE_MB = int(os.getenv("MAX_DOCUMENT_SIZE_MB", 10))
-MAX_MEMORY_USAGE_MB = int(os.getenv("MAX_MEMORY_USAGE_MB", 400))
-MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", 2000))
-MAX_CHUNKS = int(os.getenv("MAX_CHUNKS", 20))
-MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", 10))
-MAX_PAGES = int(os.getenv("MAX_PAGES", 20))
-MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", 50000))
+MAX_DOCUMENT_SIZE_MB = int(os.getenv("MAX_DOCUMENT_SIZE_MB", 5))
+MAX_MEMORY_USAGE_MB = int(os.getenv("MAX_MEMORY_USAGE_MB", 300))
+MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", 1000))
+MAX_CHUNKS = int(os.getenv("MAX_CHUNKS", 10))
+MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", 5))
+MAX_PAGES = int(os.getenv("MAX_PAGES", 10))
+MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", 25000))
 
 # API Settings
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", 2))
 RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", 5.0))
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", 100))
-TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", 180))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", 50))
+TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", 120))
 
 # Model Settings
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/paraphrase-MiniLM-L3-v2")

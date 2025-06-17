@@ -16,6 +16,7 @@ from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDo
 from fastapi.middleware.cors import CORSMiddleware
 import time
 import psutil
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -97,10 +98,10 @@ async def chat(request: Request, pdf_file: bytes = File(), filename: str = Form(
         
         # Check file size
         file_size_mb = len(pdf_file) / (1024 * 1024)
-        if file_size_mb > 10:  # 10MB limit
+        if file_size_mb > 5:  # Reduced from 10MB to 5MB
             raise HTTPException(
                 status_code=413,
-                detail=f"File too large ({file_size_mb:.2f} MB). Maximum allowed: 10 MB"
+                detail=f"File too large ({file_size_mb:.2f} MB). Maximum allowed: 5 MB"
             )
         
         base_folder = 'static/docs/'
@@ -169,10 +170,10 @@ async def chat(request: Request, pdf_filename: str = Form(...)):
         
         # Check file size
         file_size_mb = os.path.getsize(pdf_filename) / (1024 * 1024)
-        if file_size_mb > 10:
+        if file_size_mb > 5:  # Reduced from 10MB to 5MB
             raise HTTPException(
                 status_code=413,
-                detail=f"File too large ({file_size_mb:.2f} MB). Maximum allowed: 10 MB"
+                detail=f"File too large ({file_size_mb:.2f} MB). Maximum allowed: 5 MB"
             )
         
         # Check memory limit
@@ -183,9 +184,25 @@ async def chat(request: Request, pdf_filename: str = Form(...)):
                 detail="Server is currently under high load. Please try again later."
             )
         
-        logger.info("Calling get_csv function...")
-        output_file, qa_data = get_csv(pdf_filename)
-        logger.info(f"Analysis completed. Output file: {output_file}, Q&A count: {len(qa_data)}")
+        # Add timeout wrapper for the analysis
+        try:
+            logger.info("Calling get_csv function...")
+            # Run the analysis with a timeout
+            loop = asyncio.get_event_loop()
+            output_file, qa_data = await loop.run_in_executor(None, get_csv, pdf_filename)
+            logger.info(f"Analysis completed. Output file: {output_file}, Q&A count: {len(qa_data)}")
+        except asyncio.TimeoutError:
+            logger.error("Analysis timed out")
+            raise HTTPException(
+                status_code=408,
+                detail="Analysis timed out. Please try with a smaller document."
+            )
+        except Exception as e:
+            logger.error(f"Error in analysis: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Analysis failed: {str(e)}"
+            )
         
         # Check final memory usage
         final_memory = get_memory_usage()
@@ -236,6 +253,27 @@ async def download_file(filename: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@app.get("/debug")
+async def debug_info():
+    """Debug endpoint to check system status and memory usage."""
+    try:
+        memory_usage = get_memory_usage()
+        cpu_percent = psutil.cpu_percent(interval=1)
+        disk_usage = psutil.disk_usage('/')
+        
+        return {
+            "status": "debug_info",
+            "memory_usage_mb": round(memory_usage, 2),
+            "cpu_percent": cpu_percent,
+            "disk_free_gb": round(disk_usage.free / (1024**3), 2),
+            "disk_total_gb": round(disk_usage.total / (1024**3), 2),
+            "memory_limit_reached": check_memory_limit(),
+            "timestamp": time.time()
+        }
+    except Exception as e:
+        logger.error(f"Debug endpoint error: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 @app.on_event("startup")
 async def startup_event():

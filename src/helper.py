@@ -47,14 +47,15 @@ if not GROQ_API_KEY:
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 # Memory and performance settings
-MAX_DOCUMENT_SIZE_MB = 10  # Maximum document size in MB
-MAX_CHUNK_SIZE = 2000  # Reduced chunk size for memory efficiency (was 5000)
-MAX_CHUNKS = 20  # Maximum number of chunks to process
-MAX_QUESTIONS = 10  # Maximum number of questions to generate
+MAX_DOCUMENT_SIZE_MB = 5  # Reduced from 10MB to 5MB
+MAX_CHUNK_SIZE = 1000  # Further reduced chunk size for memory efficiency (was 2000)
+MAX_CHUNKS = 10  # Reduced from 20 to 10 chunks
+MAX_QUESTIONS = 5  # Reduced from 10 to 5 questions
+MAX_PAGES = 10  # Reduced from 20 to 10 pages
 RATE_LIMIT_DELAY = 5.0
-MAX_RETRIES = 3  # Reduced retries
+MAX_RETRIES = 2  # Reduced from 3 to 2
 BATCH_SIZE = 1
-MAX_TOKENS = 100  # Further reduced max tokens
+MAX_TOKENS = 50  # Further reduced max tokens
 BACKOFF_FACTOR = 2.0
 MAX_TOKENS_PER_DAY = 500000
 TOKEN_BUFFER = 1000
@@ -70,7 +71,7 @@ def check_memory_limit():
     """Check if memory usage is approaching limits."""
     memory_usage = get_memory_usage()
     logger.info(f"Current memory usage: {memory_usage:.2f} MB")
-    return memory_usage > 400  # 400MB limit for Render's 512MB
+    return memory_usage > 300  # Reduced from 400 to 300MB for Render's 512MB limit
 
 def force_garbage_collection():
     """Force garbage collection to free memory."""
@@ -286,24 +287,24 @@ def file_processing(file_path: str) -> Tuple[List[Document], List[Document]]:
         logger.info(f"Document loaded successfully. Number of pages: {len(data)}")
 
         # Limit the number of pages processed
-        if len(data) > 20:  # Limit to first 20 pages
-            logger.warning(f"Document has {len(data)} pages, limiting to first 20 pages")
-            data = data[:20]
+        if len(data) > MAX_PAGES:  # Limit to first 10 pages
+            logger.warning(f"Document has {len(data)} pages, limiting to first {MAX_PAGES}")
+            data = data[:MAX_PAGES]
 
         # Combine all pages for question generation
         question_gen = ''
         for page in data:
             question_gen += page.page_content
-            if len(question_gen) > 50000:  # Limit text size
+            if len(question_gen) > 25000:  # Reduced from 50000 to 25000
                 logger.warning("Text too long, truncating for question generation")
-                question_gen = question_gen[:50000]
+                question_gen = question_gen[:25000]
                 break
 
         # Split text for question generation with smaller chunks
         splitter_ques_gen = TokenTextSplitter(
             model_name='gpt-3.5-turbo',
             chunk_size=MAX_CHUNK_SIZE,
-            chunk_overlap=100  # Reduced overlap
+            chunk_overlap=50  # Reduced from 100 to 50
         )
         chunks_ques_gen = splitter_ques_gen.split_text(question_gen)
         
@@ -318,8 +319,8 @@ def file_processing(file_path: str) -> Tuple[List[Document], List[Document]]:
         # Split text for answer generation with even smaller chunks
         splitter_ans_gen = TokenTextSplitter(
             model_name='gpt-3.5-turbo',
-            chunk_size=500,  # Smaller chunks for answer generation (was 1000)
-            chunk_overlap=50
+            chunk_size=300,  # Further reduced from 500 to 300
+            chunk_overlap=25  # Reduced from 50 to 25
         )
         document_answer_gen = splitter_ans_gen.split_documents(document_ques_gen)
         logger.info(f"Text split into {len(document_answer_gen)} chunks for answer generation")
@@ -401,7 +402,7 @@ def timeout_decorator(seconds):
         return wrapper
     return decorator
 
-@timeout_decorator(180)  # Reduced timeout to 3 minutes
+@timeout_decorator(120)  # Reduced timeout to 2 minutes (was 3 minutes)
 def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
     """Main LLM pipeline with memory optimization."""
     try:
@@ -419,7 +420,7 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
         
         # Skip embeddings if memory usage is high
         use_embeddings = False
-        if memory_after_processing < 300:  # Only use embeddings if memory is low
+        if memory_after_processing < 200:  # Reduced from 300 to 200MB
             try:
                 embeddings = initialize_embeddings()
                 use_embeddings = True
@@ -454,13 +455,13 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
             
             # Use a simpler approach for question generation
             questions = []
-            for i, chunk in enumerate(document_ques_gen[:5]):  # Limit to first 5 chunks
+            for i, chunk in enumerate(document_ques_gen[:3]):  # Reduced from 5 to 3 chunks
                 if check_memory_limit():
                     logger.warning("Memory limit reached during question generation")
                     break
                 
                 try:
-                    prompt = f"""Generate 2-3 questions based on this text: {chunk.page_content[:2000]}"""
+                    prompt = f"""Generate 1-2 questions based on this text: {chunk.page_content[:1500]}"""  # Reduced from 2000 to 1500
                     response = llm.invoke(prompt)
                     if response:
                         content = response.content if hasattr(response, 'content') else str(response)
@@ -471,6 +472,9 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
                 
                 if len(questions) >= MAX_QUESTIONS:
                     break
+                
+                # Force garbage collection after each chunk
+                force_garbage_collection()
             
             # Limit number of questions
             if len(questions) > MAX_QUESTIONS:
@@ -512,10 +516,9 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
                         "answer": answer.strip()
                     })
                     
-                    # Force garbage collection every few questions
-                    if (i + 1) % 3 == 0:
-                        force_garbage_collection()
-                        
+                    # Force garbage collection every question (reduced from every 3)
+                    force_garbage_collection()
+                    
                 except Exception as e:
                     logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
                     qa_list.append({
