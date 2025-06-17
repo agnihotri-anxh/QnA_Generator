@@ -150,8 +150,9 @@ async def download_file(filename: str):
 
 if __name__ == "__main__":
     logger.info("Starting server...")
-    host = os.getenv("HOST", "127.0.0.1")
-    logger.info(f"Server will be available at http://{host}:{PORT}")
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 10000))
+    logger.info(f"Server will be available at http://{host}:{port}")
     
     # Ensure directories exist
     for directory in [DOCS_DIR, OUTPUT_DIR, UPLOAD_DIR]:
@@ -161,7 +162,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app:app",
         host=host,
-        port=PORT,
+        port=port,
         reload=False,
         log_level="info"
     )
