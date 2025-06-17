@@ -8,7 +8,7 @@ import os
 import aiofiles
 import json
 import csv
-from src.helper import llm_pipeline, run_with_timeout
+from src.helper import llm_pipeline
 import logging
 from pathlib import Path
 from typing import Optional
@@ -73,11 +73,6 @@ async def health_check():
     """Health check endpoint for Render."""
     return {"status": "healthy", "timestamp": time.time()}
 
-@app.get("/test")
-async def test_endpoint():
-    """Simple test endpoint to verify the app is working."""
-    return {"status": "ok", "message": "QnA Generator is running!", "timestamp": time.time()}
-
 @app.get("/ping")
 async def ping():
     """Simple ping endpoint for health checks."""
@@ -106,38 +101,24 @@ async def chat(request: Request, pdf_file: bytes = File(), filename: str = Form(
 
 def get_csv(file_path):
     try:
-        logger.info(f"Starting CSV generation with timeout for file: {file_path}")
+        output_file, qa_list = llm_pipeline(file_path)
         
-        # Use timeout wrapper for the LLM pipeline
-        from src.helper import run_with_timeout, llm_pipeline
+        # The qa_list already contains the questions and answers
+        # We just need to create the CSV file
+        base_folder = 'static/output/'
+        if not os.path.isdir(base_folder):
+            os.mkdir(base_folder)
         
-        try:
-            output_file, qa_list = run_with_timeout(llm_pipeline, [file_path], timeout_seconds=300)
-            logger.info(f"LLM pipeline completed successfully. Output: {output_file}, Q&A count: {len(qa_list)}")
-            return output_file, qa_list
-        except TimeoutError as e:
-            logger.error(f"LLM pipeline timed out: {str(e)}")
-            raise HTTPException(
-                status_code=408,
-                detail="Document processing timed out. Please try with a smaller document or try again later."
-            )
-        except Exception as e:
-            logger.error(f"LLM pipeline failed: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Document processing failed: {str(e)}"
-            )
-            
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
+        # Use the output file path returned by llm_pipeline
+        csv_file_path = output_file
+        
+        # Return the file path and qa_data for frontend
+        return csv_file_path, qa_list
     except Exception as e:
-        logger.error(f"Unexpected error in get_csv: {str(e)}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"Error generating CSV: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Unexpected error: {str(e)}"
+            detail=f"Error generating CSV: {str(e)}"
         )
 
 @app.post("/analyze")
