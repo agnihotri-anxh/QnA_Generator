@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, UnstructuredPowerPointLoader
 from fastapi.middleware.cors import CORSMiddleware
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -69,7 +70,13 @@ async def index(request: Request):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Health check endpoint for Render."""
+    return {"status": "healthy", "timestamp": time.time()}
+
+@app.get("/ping")
+async def ping():
+    """Simple ping endpoint for health checks."""
+    return {"message": "pong"}
 
 @app.post("/upload")
 async def chat(request: Request, pdf_file: bytes = File(), filename: str = Form(...)):
@@ -148,6 +155,16 @@ async def download_file(filename: str):
             detail=str(e)
         )
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize app on startup."""
+    logger.info("Application starting up...")
+    # Ensure directories exist
+    for directory in [DOCS_DIR, OUTPUT_DIR]:
+        directory.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Ensuring directory exists: {directory}")
+    logger.info("Application startup complete!")
+
 if __name__ == "__main__":
     logger.info("Starting server...")
     host = os.getenv("HOST", "0.0.0.0")
@@ -155,7 +172,7 @@ if __name__ == "__main__":
     logger.info(f"Server will be available at http://{host}:{port}")
     
     # Ensure directories exist
-    for directory in [DOCS_DIR, OUTPUT_DIR, UPLOAD_DIR]:
+    for directory in [DOCS_DIR, OUTPUT_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
         logger.info(f"Ensuring directory exists: {directory}")
     
@@ -164,5 +181,6 @@ if __name__ == "__main__":
         host=host,
         port=port,
         reload=False,
-        log_level="info"
+        log_level="info",
+        access_log=True
     )
