@@ -25,6 +25,8 @@ from datetime import datetime, timedelta
 import json
 import signal
 import functools
+import psutil
+import sys
 
 # Configure logging with more detailed format
 logging.basicConfig(
@@ -44,16 +46,37 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY environment variable is not set")
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
-# Rate limiting settings
-RATE_LIMIT_DELAY = 5.0  # Increased base delay
-MAX_RETRIES = 5  # Increased retries
-BATCH_SIZE = 1  # Reduced batch size to minimize token usage
-MAX_TOKENS = 150  # Further reduced max tokens per request
-BACKOFF_FACTOR = 2.0  # Exponential backoff factor
-MAX_TOKENS_PER_DAY = 500000  # Groq's daily limit
-TOKEN_BUFFER = 1000  # Buffer to prevent hitting limit
+# Memory and performance settings
+MAX_DOCUMENT_SIZE_MB = 10  # Maximum document size in MB
+MAX_CHUNK_SIZE = 2000  # Reduced chunk size for memory efficiency (was 5000)
+MAX_CHUNKS = 20  # Maximum number of chunks to process
+MAX_QUESTIONS = 10  # Maximum number of questions to generate
+RATE_LIMIT_DELAY = 5.0
+MAX_RETRIES = 3  # Reduced retries
+BATCH_SIZE = 1
+MAX_TOKENS = 100  # Further reduced max tokens
+BACKOFF_FACTOR = 2.0
+MAX_TOKENS_PER_DAY = 500000
+TOKEN_BUFFER = 1000
 TOKEN_USAGE_FILE = "token_usage.json"
 DAILY_TOKEN_LIMIT = 500000
+
+def get_memory_usage():
+    """Get current memory usage in MB."""
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / 1024 / 1024
+
+def check_memory_limit():
+    """Check if memory usage is approaching limits."""
+    memory_usage = get_memory_usage()
+    logger.info(f"Current memory usage: {memory_usage:.2f} MB")
+    return memory_usage > 400  # 400MB limit for Render's 512MB
+
+def force_garbage_collection():
+    """Force garbage collection to free memory."""
+    gc.collect()
+    memory_usage = get_memory_usage()
+    logger.info(f"Memory after GC: {memory_usage:.2f} MB")
 
 def get_backoff_delay(attempt: int) -> float:
     """Calculate exponential backoff delay."""
@@ -66,6 +89,11 @@ def get_document_loader(file_path):
         
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
+        
+        # Check file size
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        if file_size_mb > MAX_DOCUMENT_SIZE_MB:
+            raise ValueError(f"File too large ({file_size_mb:.2f} MB). Maximum allowed: {MAX_DOCUMENT_SIZE_MB} MB")
             
         if file_extension == '.pdf':
             return PyPDFLoader(file_path)
@@ -102,7 +130,7 @@ def estimate_tokens(text: str) -> int:
 
 def check_token_limit(content: str, question: str) -> bool:
     """Check if the request would exceed token limits."""
-    estimated_tokens = estimate_tokens(content) + estimate_tokens(question) + 100  # Add buffer for system message
+    estimated_tokens = estimate_tokens(content) + estimate_tokens(question) + 100
     return estimated_tokens <= (MAX_TOKENS - TOKEN_BUFFER)
 
 def load_token_usage():
@@ -129,7 +157,6 @@ def check_token_limit():
     usage_data = load_token_usage()
     current_date = datetime.now().strftime("%Y-%m-%d")
     
-    # Reset counter if it's a new day
     if usage_data["date"] != current_date:
         usage_data = {"date": current_date, "tokens_used": 0}
         save_token_usage(usage_data)
@@ -141,7 +168,6 @@ def update_token_usage(tokens_used):
     usage_data = load_token_usage()
     current_date = datetime.now().strftime("%Y-%m-%d")
     
-    # Reset counter if it's a new day
     if usage_data["date"] != current_date:
         usage_data = {"date": current_date, "tokens_used": 0}
     
@@ -152,7 +178,6 @@ def process_batch(batch, llm, document_content=None):
     results = []
     for question in batch:
         try:
-            # Check token limits before processing
             if check_token_limit():
                 logger.warning("Daily token limit reached")
                 results.append({
@@ -161,7 +186,6 @@ def process_batch(batch, llm, document_content=None):
                 })
                 continue
 
-            # Create a more structured prompt for better answer generation
             prompt = f"""Answer this question based on the document:
 
 Document: {document_content if document_content else "No content provided."}
@@ -170,20 +194,17 @@ Question: {question}
 
 Answer:"""
             
-            # Generate answer using ChatGroq with improved error handling
             try:
-                # Create messages using proper LangChain message types
                 messages = [
                     SystemMessage(content="You are a document analysis expert. Provide concise, accurate answers based only on the given content."),
                     HumanMessage(content=prompt)
                 ]
                 
-                # Get response from LLM with improved retry mechanism
                 response = None
                 for attempt in range(MAX_RETRIES):
                     try:
                         response = llm.invoke(messages)
-                        if response:  # Ensure we got a valid response
+                        if response:
                             break
                     except Exception as e:
                         error_msg = str(e)
@@ -199,146 +220,113 @@ Answer:"""
                             logger.warning(f"Rate limit hit, retrying in {backoff_delay:.2f} seconds (attempt {attempt + 1}/{MAX_RETRIES})")
                             time.sleep(backoff_delay)
                         else:
-                            logger.error(f"Error in LLM invocation: {error_msg}")
                             raise e
-                
-                if not response:
-                    raise ValueError("No response received from LLM after all retries")
-                
-                # Extract the answer from the response with multiple fallback methods
-                answer = None
-                if isinstance(response, dict):
-                    if 'choices' in response and response['choices']:
-                        answer = response['choices'][0]['message']['content'].strip()
-                    elif 'content' in response:
-                        answer = response['content'].strip()
-                elif hasattr(response, 'content'):
-                    answer = response.content.strip()
-                elif isinstance(response, str):
-                    answer = response.strip()
-                
-                # Validate and clean the answer
-                if not answer or answer.isspace():
-                    answer = "Unable to generate an answer from the document content."
-                elif len(answer) < 10:  # Too short to be a meaningful answer
-                    answer = "The generated answer was too short. Please try again."
-                
-                results.append({
-                    "question": question,
-                    "answer": answer
-                })
-                
-                # After successful response, update token usage
-                if isinstance(response, dict) and 'usage' in response:
-                    update_token_usage(response['usage']['total_tokens'])
+
+                if response:
+                    results.append({
+                        "question": question,
+                        "answer": response.content.strip() if hasattr(response, 'content') else str(response).strip()
+                    })
                 else:
-                    # Estimate token usage if not provided
-                    estimated_tokens = estimate_tokens(prompt) + estimate_tokens(str(response))
-                    update_token_usage(estimated_tokens)
-                
+                    results.append({
+                        "question": question,
+                        "answer": "Unable to generate answer. Please try again."
+                    })
+
             except Exception as e:
-                logger.error(f"Error in LLM response processing: {str(e)}")
+                logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
                 results.append({
                     "question": question,
-                    "answer": "An error occurred while processing your request. Please try again."
+                    "answer": "Error generating answer. Please try again."
                 })
-                
+
         except Exception as e:
-            logger.error(f"Error processing question: {str(e)}")
+            logger.error(f"Error processing question: {question}. Error: {str(e)}")
             results.append({
                 "question": question,
-                "answer": "An error occurred while processing your request. Please try again."
+                "answer": "Error processing question. Please try again."
             })
-    
+
     return results
 
 def process_chunk_with_retry(chunk: str, llm: ChatGroq, prompt: PromptTemplate, max_retries: int = MAX_RETRIES) -> str:
-    """Process a single chunk of text with retry logic."""
+    """Process a chunk with retry mechanism and memory management."""
     for attempt in range(max_retries):
         try:
-            cleaned_chunk = clean_text(chunk)
-            if not cleaned_chunk:
-                logger.warning("Empty chunk after cleaning")
-                return ""
-
-            logger.info(f"Processing chunk (attempt {attempt + 1}/{max_retries})")
-            chain = load_summarize_chain(
-                llm=llm,
-                chain_type="stuff",
-                prompt=prompt,
-                verbose=True
-            )
+            if check_memory_limit():
+                logger.warning("Memory limit approaching, forcing garbage collection")
+                force_garbage_collection()
             
-            # Add more context to the prompt
-            formatted_prompt = prompt.format(text=cleaned_chunk)
-            logger.info(f"Formatted prompt length: {len(formatted_prompt)}")
-            
-            # Create proper message format for the chain
-            messages = [HumanMessage(content=formatted_prompt)]
-            
-            result = chain.invoke([Document(page_content=cleaned_chunk)])
-            
-            # Handle dictionary response
-            if isinstance(result, dict):
-                if 'output_text' in result:
-                    result = result['output_text']
-                elif 'text' in result:
-                    result = result['text']
-                else:
-                    logger.warning(f"Unexpected dictionary format: {result}")
-                    result = str(result)
-            
-            if not result or not result.strip():
-                logger.warning(f"Empty result received from LLM on attempt {attempt + 1}")
-                if attempt == max_retries - 1:
-                    return ""
-                continue
-                
-            logger.info(f"Successfully processed chunk (attempt {attempt + 1})")
-            return result
+            response = llm.invoke(prompt.format(text=chunk))
+            return response.content.strip() if hasattr(response, 'content') else str(response).strip()
             
         except Exception as e:
-            logger.error(f"Attempt {attempt + 1} failed with error: {str(e)}")
-            if attempt == max_retries - 1:
-                logger.error(f"Failed to process chunk after {max_retries} attempts: {str(e)}")
-                return ""
-            logger.warning(f"Attempt {attempt + 1} failed, retrying... Error: {str(e)}")
-            time.sleep(RATE_LIMIT_DELAY * (attempt + 1))
+            error_msg = str(e)
+            if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
+                if attempt == max_retries - 1:
+                    raise Exception("Rate limit reached. Please try again later.")
+                backoff_delay = get_backoff_delay(attempt)
+                logger.warning(f"Rate limit hit, retrying in {backoff_delay:.2f} seconds")
+                time.sleep(backoff_delay)
+            else:
+                raise e
 
 def file_processing(file_path: str) -> Tuple[List[Document], List[Document]]:
-    """Process the input file and return documents for question and answer generation."""
+    """Process the input file with memory optimization."""
     try:
         logger.info(f"Starting file processing for: {file_path}")
         
-        # Load data from PDF
-        loader = PyPDFLoader(file_path)
+        # Check memory before processing
+        initial_memory = get_memory_usage()
+        logger.info(f"Initial memory usage: {initial_memory:.2f} MB")
+        
+        # Load data from PDF with size limit
+        loader = get_document_loader(file_path)
         data = loader.load()
         logger.info(f"Document loaded successfully. Number of pages: {len(data)}")
+
+        # Limit the number of pages processed
+        if len(data) > 20:  # Limit to first 20 pages
+            logger.warning(f"Document has {len(data)} pages, limiting to first 20 pages")
+            data = data[:20]
 
         # Combine all pages for question generation
         question_gen = ''
         for page in data:
             question_gen += page.page_content
+            if len(question_gen) > 50000:  # Limit text size
+                logger.warning("Text too long, truncating for question generation")
+                question_gen = question_gen[:50000]
+                break
 
-        # Split text for question generation
+        # Split text for question generation with smaller chunks
         splitter_ques_gen = TokenTextSplitter(
             model_name='gpt-3.5-turbo',
-            chunk_size=10000,
-            chunk_overlap=200
+            chunk_size=MAX_CHUNK_SIZE,
+            chunk_overlap=100  # Reduced overlap
         )
         chunks_ques_gen = splitter_ques_gen.split_text(question_gen)
+        
+        # Limit number of chunks
+        if len(chunks_ques_gen) > MAX_CHUNKS:
+            logger.warning(f"Too many chunks ({len(chunks_ques_gen)}), limiting to {MAX_CHUNKS}")
+            chunks_ques_gen = chunks_ques_gen[:MAX_CHUNKS]
+        
         document_ques_gen = [Document(page_content=t) for t in chunks_ques_gen]
         logger.info(f"Text split into {len(document_ques_gen)} chunks for question generation")
         
-        # Split text for answer generation
+        # Split text for answer generation with even smaller chunks
         splitter_ans_gen = TokenTextSplitter(
             model_name='gpt-3.5-turbo',
-            chunk_size=1000,
-            chunk_overlap=100
+            chunk_size=500,  # Smaller chunks for answer generation (was 1000)
+            chunk_overlap=50
         )
         document_answer_gen = splitter_ans_gen.split_documents(document_ques_gen)
         logger.info(f"Text split into {len(document_answer_gen)} chunks for answer generation")
 
+        # Force garbage collection after processing
+        force_garbage_collection()
+        
         return document_ques_gen, document_answer_gen
     
     except Exception as e:
@@ -361,35 +349,31 @@ def generate_csv(qa_list: List[dict], file_path: str) -> str:
         raise Exception(f"Failed to generate CSV file: {str(e)}")
 
 def initialize_embeddings():
-    """Initialize embeddings with error handling and fallback."""
+    """Initialize embeddings with memory optimization."""
     try:
-        logger.info("Initializing embeddings with all-MiniLM-L6-v2 model...")
+        logger.info("Initializing embeddings with lightweight model...")
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",  # Lighter model
             model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True, 'batch_size': 8}
+            encode_kwargs={'normalize_embeddings': True, 'batch_size': 2}  # Smaller batch size
         )
         return embeddings
     except Exception as e:
-        logger.warning(f"Failed to load all-MiniLM-L6-v2, trying lighter model: {str(e)}")
-        try:
-            logger.info("Initializing embeddings with lighter model...")
-            embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True, 'batch_size': 4}
-            )
-            return embeddings
-        except Exception as e2:
-            logger.error(f"Error initializing embeddings with fallback model: {str(e2)}")
-            raise
+        logger.error(f"Error initializing embeddings: {str(e)}")
+        raise
 
 def create_vector_store(documents, embeddings):
-    """Create vector store with retry mechanism."""
-    max_retries = 3
+    """Create vector store with memory optimization."""
+    max_retries = 2  # Reduced retries
     for attempt in range(max_retries):
         try:
             logger.info(f"Creating vector store (attempt {attempt + 1}/{max_retries})...")
+            
+            # Limit documents for vector store
+            if len(documents) > 10:
+                logger.warning(f"Too many documents ({len(documents)}), limiting to 10 for vector store")
+                documents = documents[:10]
+            
             vector_store = FAISS.from_documents(documents, embeddings)
             logger.info("Vector store created successfully")
             return vector_store
@@ -398,7 +382,7 @@ def create_vector_store(documents, embeddings):
                 logger.error(f"Failed to create vector store after {max_retries} attempts: {str(e)}")
                 raise
             logger.warning(f"Attempt {attempt + 1} failed, retrying...")
-            time.sleep(2 ** attempt)  # Exponential backoff
+            time.sleep(2 ** attempt)
 
 def timeout_handler(signum, frame):
     raise TimeoutError("Operation timed out")
@@ -407,178 +391,149 @@ def timeout_decorator(seconds):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            # Set the signal handler
             signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(seconds)
             try:
                 result = func(*args, **kwargs)
             finally:
-                signal.alarm(0)  # Disable the alarm
+                signal.alarm(0)
             return result
         return wrapper
     return decorator
 
-@timeout_decorator(300)  # 5 minutes timeout
+@timeout_decorator(180)  # Reduced timeout to 3 minutes
 def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
-    """Main LLM pipeline with improved error handling and memory management."""
+    """Main LLM pipeline with memory optimization."""
     try:
         logger.info("Starting LLM pipeline...")
+        initial_memory = get_memory_usage()
+        logger.info(f"Initial memory usage: {initial_memory:.2f} MB")
         
         # Process file
         logger.info(f"Starting file processing for: {file_path}")
         document_ques_gen, document_answer_gen = file_processing(file_path)
         
-        # Try to initialize embeddings, fallback if it fails
-        try:
-            embeddings = initialize_embeddings()
-            use_embeddings = True
-            logger.info("Embeddings initialized successfully")
-        except Exception as e:
-            logger.warning(f"Failed to initialize embeddings, using fallback mode: {str(e)}")
-            use_embeddings = False
+        # Check memory after file processing
+        memory_after_processing = get_memory_usage()
+        logger.info(f"Memory after file processing: {memory_after_processing:.2f} MB")
         
-        # Create vector store only if embeddings are available
-        if use_embeddings:
+        # Skip embeddings if memory usage is high
+        use_embeddings = False
+        if memory_after_processing < 300:  # Only use embeddings if memory is low
             try:
-                vector_store = create_vector_store(document_ques_gen, embeddings)
-                del embeddings
-                gc.collect()
+                embeddings = initialize_embeddings()
+                use_embeddings = True
+                logger.info("Embeddings initialized successfully")
+                
+                try:
+                    vector_store = create_vector_store(document_ques_gen, embeddings)
+                    del embeddings
+                    force_garbage_collection()
+                except Exception as e:
+                    logger.warning(f"Failed to create vector store, using fallback mode: {str(e)}")
+                    use_embeddings = False
             except Exception as e:
-                logger.warning(f"Failed to create vector store, using fallback mode: {str(e)}")
+                logger.warning(f"Failed to initialize embeddings, using fallback mode: {str(e)}")
                 use_embeddings = False
         
-        # Initialize LLM for question generation
+        # Initialize single LLM instance for both questions and answers
         try:
-            logger.info("Initializing question generation LLM...")
-            llm_ques_gen_pipeline = ChatGroq(
+            logger.info("Initializing LLM...")
+            llm = ChatGroq(
                 temperature=0.3,
-                model_name="gemma2-9b-it"
+                model_name="mistral-saba-24b"
             )
-            logger.info("Question generation LLM initialized successfully")
+            logger.info("LLM initialized successfully")
         except Exception as e:
-            logger.error(f"Error initializing question generation LLM: {str(e)}")
+            logger.error(f"Error initializing LLM: {str(e)}")
             raise Exception(f"Failed to initialize LLM: {str(e)}")
 
-        # Create prompts for question generation
-        try:
-            logger.info("Creating question generation prompts...")
-            PROMPT_QUESTIONS = PromptTemplate(
-                template=prompt_template,
-                input_variables=["text"]
-            )
-            REFINE_PROMPT_QUESTIONS = PromptTemplate(
-                input_variables=["existing_answer", "text"],
-                template=refine_template
-            )
-            logger.info("Question generation prompts created successfully")
-        except Exception as e:
-            logger.error(f"Failed to create question generation prompts: {str(e)}")
-            raise Exception(f"Failed to create prompts: {str(e)}")
-
-        # Generate questions
+        # Generate questions with memory monitoring
         try:
             logger.info("Generating questions...")
-            ques_gen_chain = load_summarize_chain(
-                llm=llm_ques_gen_pipeline,
-                chain_type="refine",
-                verbose=True,
-                question_prompt=PROMPT_QUESTIONS,
-                refine_prompt=REFINE_PROMPT_QUESTIONS
-            )
             
-            for attempt in range(MAX_RETRIES):
-                try:
-                    questions = ques_gen_chain.run(document_ques_gen)
+            # Use a simpler approach for question generation
+            questions = []
+            for i, chunk in enumerate(document_ques_gen[:5]):  # Limit to first 5 chunks
+                if check_memory_limit():
+                    logger.warning("Memory limit reached during question generation")
                     break
-                except Exception as e:
-                    if "rate_limit_exceeded" in str(e).lower() or "429" in str(e):
-                        if attempt == MAX_RETRIES - 1:
-                            raise Exception("Rate limit reached. Please try again later.")
-                        backoff_delay = get_backoff_delay(attempt)
-                        logger.warning(f"Rate limit hit, retrying in {backoff_delay:.2f} seconds")
-                        time.sleep(backoff_delay)
-                    else:
-                        raise e
-
-            # Process generated questions
-            ques_list = questions.split("\n")
-            filtered_ques_list = [q.strip() for q in ques_list if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
-            logger.info(f"Generated {len(filtered_ques_list)} questions")
-            
-            # Clear question generation chain from memory
-            del ques_gen_chain, llm_ques_gen_pipeline
-            gc.collect()
                 
+                try:
+                    prompt = f"""Generate 2-3 questions based on this text: {chunk.page_content[:2000]}"""
+                    response = llm.invoke(prompt)
+                    if response:
+                        content = response.content if hasattr(response, 'content') else str(response)
+                        questions.extend([q.strip() for q in content.split('\n') if q.strip() and '?' in q])
+                except Exception as e:
+                    logger.error(f"Error generating questions from chunk {i}: {str(e)}")
+                    continue
+                
+                if len(questions) >= MAX_QUESTIONS:
+                    break
+            
+            # Limit number of questions
+            if len(questions) > MAX_QUESTIONS:
+                questions = questions[:MAX_QUESTIONS]
+            
+            logger.info(f"Generated {len(questions)} questions")
+            
         except Exception as e:
             logger.error(f"Error generating questions: {str(e)}")
-            raise Exception(f"Failed to generate questions: {str(e)}")
+            # Fallback: generate simple questions
+            questions = ["What is the main topic of this document?", "What are the key points discussed?"]
 
-        # Generate answers based on whether embeddings are available
+        # Generate answers
         try:
             logger.info("Generating answers...")
             qa_list = []
             
-            if use_embeddings:
-                # Use vector store for answer generation
-                llm_answer_gen = ChatGroq(temperature=0.1, model_name="gemma2-9b-it")
-                answer_chain = RetrievalQA.from_chain_type(
-                    llm=llm_answer_gen,
-                    chain_type="stuff",
-                    retriever=vector_store.as_retriever()
-                )
+            for i, question in enumerate(questions):
+                if check_memory_limit():
+                    logger.warning("Memory limit reached during answer generation")
+                    break
                 
-                for i, question in enumerate(filtered_ques_list):
-                    try:
+                try:
+                    if use_embeddings:
+                        answer_chain = RetrievalQA.from_chain_type(
+                            llm=llm,
+                            chain_type="stuff",
+                            retriever=vector_store.as_retriever()
+                        )
                         answer = answer_chain.run(question)
-                        qa_list.append({
-                            "question": question,
-                            "answer": answer.strip()
-                        })
-                        
-                        if (i + 1) % 5 == 0:
-                            gc.collect()
-                            
-                    except Exception as e:
-                        logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
-                        qa_list.append({
-                            "question": question,
-                            "answer": "Error generating answer. Please try again."
-                        })
-                
-                del answer_chain, llm_answer_gen, vector_store
-                gc.collect()
-            else:
-                # Fallback: generate simple answers without embeddings
-                llm_answer_gen = ChatGroq(temperature=0.1, model_name="gemma2-9b-it")
-                
-                for i, question in enumerate(filtered_ques_list):
-                    try:
-                        # Use a simple prompt for answer generation
+                    else:
+                        # Simple answer generation without embeddings
                         prompt = f"Answer this question based on the document content: {question}"
-                        answer = llm_answer_gen.invoke(prompt)
-                        qa_list.append({
-                            "question": question,
-                            "answer": answer.content.strip() if hasattr(answer, 'content') else str(answer).strip()
-                        })
-                        
-                        if (i + 1) % 5 == 0:
-                            gc.collect()
-                            
-                    except Exception as e:
-                        logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
-                        qa_list.append({
-                            "question": question,
-                            "answer": "Error generating answer. Please try again."
-                        })
-                
-                del llm_answer_gen
-                gc.collect()
+                        response = llm.invoke(prompt)
+                        answer = response.content if hasattr(response, 'content') else str(response)
                     
+                    qa_list.append({
+                        "question": question,
+                        "answer": answer.strip()
+                    })
+                    
+                    # Force garbage collection every few questions
+                    if (i + 1) % 3 == 0:
+                        force_garbage_collection()
+                        
+                except Exception as e:
+                    logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
+                    qa_list.append({
+                        "question": question,
+                        "answer": "Error generating answer. Please try again."
+                    })
+            
             logger.info(f"Generated answers for {len(qa_list)} questions")
             
         except Exception as e:
             logger.error(f"Error in answer generation: {str(e)}")
             raise Exception(f"Failed to generate answers: {str(e)}")
+
+        # Clean up
+        if use_embeddings:
+            del vector_store
+        del llm
+        force_garbage_collection()
 
         # Generate CSV file
         try:
@@ -588,6 +543,9 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
         except Exception as e:
             logger.error(f"Failed to generate CSV file: {str(e)}")
             raise Exception(f"Failed to generate CSV file: {str(e)}")
+
+        final_memory = get_memory_usage()
+        logger.info(f"Final memory usage: {final_memory:.2f} MB")
 
         return output_file, qa_list
 
