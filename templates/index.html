@@ -2,149 +2,279 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QnA Generator</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9" crossorigin="anonymous">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    
     <style>
-        :root {
-            --primary-color: #667eea;
-            --secondary-color: #764ba2;
-            --accent-color: #f093fb;
-            --success-color: #4facfe;
-            --dark-bg: #1a1a2e;
-            --card-bg: #16213e;
-            --text-light: #e8e8e8;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
 
         body {
-            background: linear-gradient(135deg, var(--dark-bg) 0%, #16213e 100%);
-            color: var(--text-light);
+            background: linear-gradient(45deg, #1a1a2e, #16213e, #0f3460);
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             min-height: 100vh;
+            padding: 20px;
         }
 
-        .hero-section {
-            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
-            padding: 4rem 0;
-            position: relative;
-            overflow: hidden;
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 30px 0;
         }
 
-        .hero-section::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="white" opacity="0.1"/><circle cx="75" cy="75" r="1" fill="white" opacity="0.1"/><circle cx="50" cy="10" r="0.5" fill="white" opacity="0.1"/><circle cx="10" cy="60" r="0.5" fill="white" opacity="0.1"/><circle cx="90" cy="40" r="0.5" fill="white" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
-            opacity: 0.3;
-        }
-
-        .hero-content {
-            position: relative;
-            z-index: 2;
-        }
-
-        .main-title {
+        .title {
             font-size: 3.5rem;
-            font-weight: 700;
-            margin-bottom: 1rem;
-            background: linear-gradient(45deg, #fff, #f0f0f0);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #fff;
+            margin-bottom: 15px;
+            font-weight: 300;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
         }
 
         .subtitle {
+            color: #b8c5d6;
             font-size: 1.2rem;
-            opacity: 0.9;
-            margin-bottom: 2rem;
+            margin-bottom: 20px;
         }
 
-        .upload-card {
+        .patent-message {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-weight: 500;
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+            display: inline-block;
+            font-size: 1.1rem;
+        }
+
+        .main-content {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .upload-section {
             background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
+            backdrop-filter: blur(20px);
+            border-radius: 15px;
+            padding: 40px;
             border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 20px;
-            padding: 3rem;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            margin-bottom: 30px;
         }
 
-        .upload-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
+        .upload-section h2 {
+            color: #fff;
+            font-size: 1.8rem;
+            margin-bottom: 25px;
+            text-align: center;
         }
 
         .upload-area {
-            border: 3px dashed rgba(255, 255, 255, 0.3);
-            border-radius: 15px;
-            padding: 3rem 2rem;
-            text-align: center;
-            transition: all 0.3s ease;
+            border: 2px dashed #4a90e2;
+            border-radius: 8px;
+            padding: 60px 30px;
             cursor: pointer;
-            background: rgba(255, 255, 255, 0.05);
+            transition: all 0.3s ease;
+            background: rgba(74, 144, 226, 0.05);
+            position: relative;
+            margin-bottom: 25px;
+            text-align: center;
         }
 
         .upload-area:hover {
-            border-color: var(--accent-color);
-            background: rgba(255, 255, 255, 0.1);
+            border-color: #5cb85c;
+            background: rgba(92, 184, 92, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .upload-area.dragover {
+            border-color: #5cb85c;
+            background: rgba(92, 184, 92, 0.15);
+            transform: scale(1.02);
         }
 
         .upload-icon {
             font-size: 4rem;
-            color: var(--accent-color);
-            margin-bottom: 1rem;
+            color: #4a90e2;
+            margin-bottom: 20px;
         }
 
-        .file-input {
+        .upload-text {
+            font-size: 1.4rem;
+            color: #fff;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+
+        .upload-hint {
+            color: #b8c5d6;
+            font-size: 1rem;
+        }
+
+        .file-info {
+            background: linear-gradient(45deg, #5cb85c, #449d44);
+            color: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 25px;
+            display: none;
+            text-align: left;
+        }
+
+        .file-name {
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 1.1rem;
+        }
+
+        .file-size {
+            opacity: 0.9;
+            font-size: 1rem;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #4a90e2, #357abd);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 18px 40px;
+            font-size: 1.2rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+            box-shadow: 0 4px 15px rgba(74, 144, 226, 0.3);
+        }
+
+        .btn:hover:not(:disabled) {
+            background: linear-gradient(45deg, #357abd, #2e6da4);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(74, 144, 226, 0.4);
+        }
+
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .results-section {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border-radius: 15px;
+            padding: 40px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             display: none;
         }
 
-        .upload-btn {
-            background: linear-gradient(45deg, var(--success-color), var(--accent-color));
-            border: none;
-            border-radius: 50px;
-            padding: 1rem 3rem;
+        .results-section h2 {
+            color: #fff;
+            font-size: 1.8rem;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .results-description {
+            color: #b8c5d6;
             font-size: 1.1rem;
-            font-weight: 600;
-            color: white;
-            transition: all 0.3s ease;
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
-        }
-
-        .upload-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.3);
-            color: white;
-        }
-
-        .upload-btn:disabled {
-            opacity: 0.6;
-            transform: none;
-        }
-
-        .result-section {
-            background: var(--card-bg);
-            border-radius: 20px;
-            padding: 2rem;
-            margin-top: 2rem;
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            margin-bottom: 30px;
+            line-height: 1.5;
         }
 
         .loader {
             text-align: center;
-            padding: 3rem;
+            padding: 40px;
+            display: none;
         }
 
         .spinner {
-            font-size: 4rem;
-            color: var(--accent-color);
+            width: 50px;
+            height: 50px;
+            border: 5px solid rgba(255, 255, 255, 0.3);
+            border-top: 5px solid #4a90e2;
+            border-radius: 50%;
             animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        .loader-text {
+            color: #b8c5d6;
+            font-size: 1.1rem;
+        }
+
+        .results {
+            display: none;
+        }
+
+        .qa-item {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-left: 4px solid #4a90e2;
+            backdrop-filter: blur(10px);
+        }
+
+        .question {
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 10px;
+            font-size: 1rem;
+        }
+
+        .answer {
+            color: #b8c5d6;
+            line-height: 1.5;
+            font-size: 0.95rem;
+        }
+
+        .download-section {
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .download-btn {
+            background: linear-gradient(45deg, #5cb85c, #449d44);
+            color: white;
+            text-decoration: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-weight: 600;
+            display: inline-block;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(92, 184, 92, 0.3);
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(92, 184, 92, 0.4);
+            color: white;
+        }
+
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: none;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        .error {
+            background: linear-gradient(45deg, #d9534f, #c9302c);
+            color: white;
+            box-shadow: 0 4px 15px rgba(217, 83, 79, 0.3);
+        }
+
+        .success {
+            background: linear-gradient(45deg, #5cb85c, #449d44);
+            color: white;
+            box-shadow: 0 4px 15px rgba(92, 184, 92, 0.3);
         }
 
         @keyframes spin {
@@ -152,476 +282,253 @@
             100% { transform: rotate(360deg); }
         }
 
-        .download-section {
-            text-align: center;
-            padding: 3rem;
-        }
-
-        .download-btn {
-            background: linear-gradient(45deg, var(--success-color), var(--accent-color));
-            border: none;
-            border-radius: 50px;
-            padding: 1.5rem 3rem;
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: white;
-            text-decoration: none;
-            display: inline-block;
-            transition: all 0.3s ease;
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
-        }
-
-        .download-btn:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.3);
-            color: white;
-        }
-
-        .pdf-viewer {
-            border-radius: 15px;
-            overflow: hidden;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-        }
-
-        .feature-card {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 15px;
-            padding: 2rem;
-            text-align: center;
-            margin-bottom: 2rem;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .feature-icon {
-            font-size: 3rem;
-            color: var(--accent-color);
-            margin-bottom: 1rem;
-        }
-
-        .hidden {
-            display: none !important;
-        }
-
-        .fade-in {
-            animation: fadeIn 0.5s ease-in;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .file-info {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            padding: 1rem;
-            margin: 1rem 0;
-            border-left: 4px solid var(--accent-color);
-        }
-
-        .progress-bar {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            height: 6px;
-            overflow: hidden;
-            margin: 1rem 0;
-        }
-
-        .progress-fill {
-            background: linear-gradient(45deg, var(--success-color), var(--accent-color));
-            height: 100%;
-            width: 0%;
-            transition: width 0.3s ease;
-            border-radius: 10px;
-        }
-
-        .qa-results {
-            padding: 2rem;
-        }
-
-        .qa-list {
-            margin-bottom: 2rem;
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .qa-item {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-            padding: 1.5rem;
-            margin-bottom: 1rem;
-            border-left: 4px solid var(--accent-color);
-            transition: all 0.3s ease;
-        }
-
-        .qa-item:hover {
-            background: rgba(255, 255, 255, 0.1);
-            transform: translateX(5px);
-        }
-
-        .qa-question {
-            font-weight: 600;
-            color: var(--accent-color);
-            margin-bottom: 0.5rem;
-            font-size: 1.1rem;
-        }
-
-        .qa-answer {
-            color: var(--text-light);
-            line-height: 1.6;
-            opacity: 0.9;
-        }
-
-        .qa-number {
-            background: var(--accent-color);
-            color: white;
-            border-radius: 50%;
-            width: 25px;
-            height: 25px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.8rem;
-            font-weight: bold;
-            margin-right: 0.5rem;
-        }
-
-        .qa-list::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .qa-list::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 3px;
-        }
-
-        .qa-list::-webkit-scrollbar-thumb {
-            background: var(--accent-color);
-            border-radius: 3px;
-        }
-
-        .qa-list::-webkit-scrollbar-thumb:hover {
-            background: var(--success-color);
+        @media (max-width: 768px) {
+            .title {
+                font-size: 2.5rem;
+            }
+            
+            .upload-area {
+                padding: 40px 20px;
+            }
+            
+            .patent-message {
+                font-size: 1rem;
+                padding: 12px 20px;
+            }
+            
+            .upload-section, .results-section {
+                padding: 30px 20px;
+            }
         }
     </style>
 </head>
 <body>
-    <!-- Hero Section -->
-    <section class="hero-section">
-        <div class="container">
-            <div class="row">
-                <div class="col-12 text-center hero-content">
-                    <h1 class="main-title">
-                        <i class="fas fa-brain me-3"></i>QnA Generator
-                    </h1>
-                    <p class="subtitle">Transform your documents into intelligent questions and answers using AI</p>
-                    <p class="subtitle small">Patience is the key to success - it may take a few minutes to generate</p>
+    <div class="header">
+        <h1 class="title">QnA Generator</h1>
+        <p class="subtitle">Transform your PDFs into intelligent questions & answers</p>
+        <div class="patent-message">
+            ⚡ Patent is key to success • Processing can take a few minutes to generate
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="upload-section">
+            <h2>📁 Upload Document</h2>
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📁</div>
+                <div class="upload-text">Click to upload PDF</div>
+                <div class="upload-hint">or drag and drop here • Max 5MB</div>
+                <input type="file" id="fileInput" accept=".pdf" style="display: none;">
+            </div>
+
+            <div class="file-info" id="fileInfo">
+                <div class="file-name" id="fileName"></div>
+                <div class="file-size" id="fileSize"></div>
+            </div>
+
+            <button class="btn" onclick="processFile()" id="processBtn" disabled>
+                🚀 Generate Q&A
+            </button>
+        </div>
+
+        <div class="results-section" id="resultsSection">
+            <h2>Generated Question Answer</h2>
+            <p class="results-description">
+                Here are some questions and answers for your document. For more detailed analysis, download the CSV file below.
+            </p>
+            
+            <div class="loader" id="loader">
+                <div class="spinner"></div>
+                <div class="loader-text">Processing your document...</div>
+            </div>
+            
+            <div class="results" id="results">
+                <div id="qaList"></div>
+                <div class="download-section">
+                    <a href="#" class="download-btn" id="downloadBtn" style="display: none;">
+                        📥 Download CSV
+                    </a>
                 </div>
             </div>
         </div>
-    </section>
 
-    <!-- Main Content -->
-    <section class="py-5">
-        <div class="container">
-            <!-- Upload Section -->
-            <div class="row">
-                <div class="col-12">
-                    <div class="upload-card">
-                        <div class="upload-area" onclick="document.getElementById('pdf-file').click()">
-                            <i class="fas fa-cloud-upload-alt upload-icon"></i>
-                            <h3>Upload Your Document</h3>
-                            <p class="mb-3">Drag & drop your file here or click to browse</p>
-                            <p class="small text-muted">Supported formats: PDF, DOCX, PPTX</p>
-                            <input type="file" class="file-input" id="pdf-file" accept=".pdf,.docx,.pptx">
-                        </div>
-                        
-                        <div class="file-info hidden" id="file-info">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-file-alt me-3"></i>
-                                <div class="flex-grow-1">
-                                    <h6 class="mb-1" id="file-name">Document Name</h6>
-                                    <small class="text-muted" id="file-size">File Size</small>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="text-center mt-4">
-                            <button type="button" id="upload-btn" class="upload-btn" disabled>
-                                <i class="fas fa-magic me-2"></i>Generate Q&A
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Result Section -->
-            <div class="result-section hidden" id="result">
-                <div class="row">
-                    <div class="col-md-6">
-                        <h4 class="mb-3">
-                            <i class="fas fa-file-pdf me-2"></i>Document Preview
-                        </h4>
-                        <div class="pdf-viewer">
-                            <embed id="view-pdf" src="" width="100%" height="500px" />
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div id="loader" class="loader">
-                            <i class="fas fa-spinner spinner"></i>
-                            <h4 class="mt-3">Processing Your Document</h4>
-                            <p class="text-muted">Generating intelligent questions and answers...</p>
-                            <div class="progress-bar">
-                                <div class="progress-fill" id="progress-fill"></div>
-                            </div>
-                        </div>
-                        
-                        <div id="qa-results" class="qa-results hidden">
-                            <h4 class="mb-3">
-                                <i class="fas fa-question-circle me-2"></i>Generated Q&A
-                            </h4>
-                            <div id="qa-list" class="qa-list">
-                                <!-- Q&A pairs will be displayed here -->
-                            </div>
-                            <div class="text-center mt-4">
-                                <a href="" id="download-btn" class="download-btn">
-                                    <i class="fas fa-download me-2"></i>Download Q&A (CSV)
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/js/bootstrap.bundle.min.js" integrity="sha384-HwwvtgBNo3bZJJLYd8oVXjrBZt8cqVSpeBNS5n7C8IVInixGAoxmnlMuBnhbgrkm" crossorigin="anonymous"></script>
-    <script src="https://kit.fontawesome.com/1da99de032.js" crossorigin="anonymous"></script>
-    <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
-    <script src="//cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+        <div class="error message" id="errorMessage"></div>
+        <div class="success message" id="successMessage"></div>
+    </div>
 
     <script>
-        let result = document.getElementById('result');
-        let loader = document.getElementById('loader');
-        let qaResults = document.getElementById('qa-results');
-        let qaList = document.getElementById('qa-list');
-        let viewPdf = document.getElementById('view-pdf');
-        let downloadBtn = document.getElementById('download-btn');
-        let fileInfo = document.getElementById('file-info');
-        let fileName = document.getElementById('file-name');
-        let fileSize = document.getElementById('file-size');
-        let uploadBtn = document.getElementById('upload-btn');
-        let progressFill = document.getElementById('progress-fill');
+        let uploadedFile = null;
 
-        // File input change handler
-        document.getElementById('pdf-file').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (file) {
-                // Show file info
-                fileName.textContent = file.name;
-                fileSize.textContent = formatFileSize(file.size);
-                fileInfo.classList.remove('hidden');
-                fileInfo.classList.add('fade-in');
-                
-                // Enable upload button
-                uploadBtn.disabled = false;
+        // Drag and drop functionality
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
             }
         });
-
-        // Format file size
-        function formatFileSize(bytes) {
-            if (bytes === 0) return '0 Bytes';
-            const k = 1024;
-            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+        
+        function handleFileSelect(file) {
+            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                showError('Please select a valid PDF file.');
+                return;
+            }
+            if (file.size > 5 * 1024 * 1024) {
+                showError('File size must be less than 5MB.');
+                return;
+            }
+            
+            uploadedFile = file;
+            document.getElementById('processBtn').disabled = false;
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = `Size: ${(file.size / (1024 * 1024)).toFixed(2)} MB`;
+            document.getElementById('fileInfo').style.display = 'block';
+            hideMessages();
+            showSuccess('File selected! Click "Generate Q&A" to continue.');
         }
-
-        // Simulate progress
-        function simulateProgress() {
-            let progress = 0;
-            const interval = setInterval(() => {
-                progress += Math.random() * 15;
-                if (progress > 90) progress = 90;
-                progressFill.style.width = progress + '%';
-            }, 500);
-            return interval;
+        
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorMessage').style.display = 'block';
+            document.getElementById('successMessage').style.display = 'none';
         }
-
-        $(document).ready(function () {
-            $("#upload-btn").click(async function (event) {
-                event.preventDefault();
+        
+        function showSuccess(message) {
+            document.getElementById('successMessage').textContent = message;
+            document.getElementById('successMessage').style.display = 'block';
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+        
+        function hideMessages() {
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+        
+        async function processFile() {
+            if (!uploadedFile) return;
+            
+            const formData = new FormData();
+            formData.append('pdf_file', uploadedFile);
+            formData.append('filename', uploadedFile.name);
+            
+            document.getElementById('resultsSection').style.display = 'block';
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            hideMessages();
+            
+            try {
+                const uploadResponse = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
                 
-                const fileInput = document.getElementById('pdf-file');
-                const file = fileInput.files[0];
-                
-                if (!file) {
-                    Swal.fire({
-                        icon: 'warning',
-                        title: 'No File Selected',
-                        text: 'Please select a file to upload.',
-                        confirmButtonColor: "#667eea"
-                    });
-                    return;
+                if (!uploadResponse.ok) {
+                    const errorText = await uploadResponse.text();
+                    throw new Error(`Upload failed: ${errorText}`);
                 }
-
-                // Disable button and show loading
-                uploadBtn.disabled = true;
-                uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Uploading...';
                 
-                const formData = new FormData();
-                formData.append('pdf_file', file);
-                formData.append('filename', file.name);
-                
+                let uploadResult;
                 try {
-                    let response = await fetch('/upload', {
-                        method: "POST",
-                        body: formData                
-                    });                
-                    processUploadResponse(response);
-                } catch (error) {
-                    console.error('Upload error:', error);
-                    Swal.fire({
-                        icon: 'error',
-                        title: 'Upload Failed',
-                        text: 'An error occurred while uploading the file.',
-                        confirmButtonColor: "#667eea"
-                    });
-                    uploadBtn.disabled = false;
-                    uploadBtn.innerHTML = '<i class="fas fa-magic me-2"></i>Generate Q&A';
+                    uploadResult = await uploadResponse.json();
+                } catch (e) {
+                    throw new Error('Invalid response from server');
                 }
+                
+                let pdfFilename;
+                try {
+                    pdfFilename = JSON.parse(uploadResult).pdf_filename;
+                } catch (e) {
+                    pdfFilename = uploadResult.pdf_filename || uploadResult;
+                }
+                
+                const analyzeFormData = new FormData();
+                analyzeFormData.append('pdf_filename', pdfFilename);
+                
+                const analyzeResponse = await fetch('/analyze', {
+                    method: 'POST',
+                    body: analyzeFormData
+                });
+                
+                if (!analyzeResponse.ok) {
+                    const errorText = await analyzeResponse.text();
+                    throw new Error(`Analysis failed: ${errorText}`);
+                }
+                
+                let analyzeResult;
+                try {
+                    analyzeResult = await analyzeResponse.json();
+                } catch (e) {
+                    throw new Error('Invalid analysis response from server');
+                }
+                
+                let data;
+                try {
+                    data = JSON.parse(analyzeResult);
+                } catch (e) {
+                    data = analyzeResult;
+                }
+                
+                if (data && data.qa_data) {
+                    displayResults(data.qa_data, data.output_file);
+                    showSuccess('Analysis completed successfully!');
+                } else {
+                    throw new Error('No Q&A data received from server');
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showError(`Processing failed: ${error.message}`);
+            } finally {
+                document.getElementById('loader').style.display = 'none';
+            }
+        }
+        
+        function displayResults(qaData, outputFile) {
+            const qaList = document.getElementById('qaList');
+            qaList.innerHTML = '';
+            
+            qaData.forEach((qa, index) => {
+                const qaDiv = document.createElement('div');
+                qaDiv.className = 'qa-item';
+                qaDiv.innerHTML = `
+                    <div class="question">❓ Question ${index + 1}: ${qa.question}</div>
+                    <div class="answer">💡 ${qa.answer}</div>
+                `;
+                qaList.appendChild(qaDiv);
             });
-        });
-
-        async function processUploadResponse(response){
-            switch (response.status) {
-                case 400:  
-                    Swal.fire({
-                        icon: 'error',
-                        title: 'Upload Failed',
-                        text: "Sorry, couldn't upload your file. Please try again.",
-                        confirmButtonColor: "#667eea"
-                    });
-                    resetUploadButton();
-                    break;
-                case 200:                 
-                    var json = await response.json();
-                    if (json.msg == "error") {
-                        Swal.fire({
-                            icon: 'error',
-                            title: 'File Too Large',
-                            text: 'Maximum number of pages exceeded.',
-                            confirmButtonColor: "#667eea"
-                        });
-                        resetUploadButton();
-                    } else {
-                        // Show result section
-                        result.classList.remove('hidden');
-                        result.classList.add('fade-in');
-                        
-                        // Show loader and start progress
-                        loader.classList.remove('hidden');
-                        qaResults.classList.add('hidden');
-                        viewPdf.setAttribute('src', "../"+json.pdf_filename);
-                        viewPdf.setAttribute('preload', 'auto');
-                        
-                        // Start progress simulation
-                        const progressInterval = simulateProgress();
-                        
-                        const formData = new FormData();
-                        formData.append('pdf_filename', json.pdf_filename);
-                        
-                        try {
-                            const analyzeResponse = await fetch('/analyze', {
-                                method: "POST",
-                                body: formData                
-                            });
-                            clearInterval(progressInterval);
-                            processAnalyzeResponse(analyzeResponse);
-                        } catch (error) {
-                            clearInterval(progressInterval);
-                            console.error('Analysis error:', error);
-                            Swal.fire({
-                                icon: 'error',
-                                title: 'Analysis Failed',
-                                text: 'An error occurred during analysis.',
-                                confirmButtonColor: "#667eea"
-                            });
-                        }
-                    }
-                    break;
-                default:
-                    Swal.fire({
-                        icon: 'error',
-                        title: 'Server Error',
-                        text: "There is a "+response.status+" error. Please try again later.",
-                        confirmButtonColor: "#667eea"
-                    });
-                    resetUploadButton();
+            
+            if (outputFile) {
+                const downloadBtn = document.getElementById('downloadBtn');
+                downloadBtn.href = `/download/${outputFile.split('/').pop()}`;
+                downloadBtn.style.display = 'inline-block';
             }
-        }
-
-        async function processAnalyzeResponse(response){            
-            switch (response.status) {
-                case 400:  
-                    Swal.fire({
-                        icon: 'error',
-                        title: 'Analysis Failed',
-                        text: "Sorry, couldn't analyze your file. Please try again.",
-                        confirmButtonColor: "#667eea"
-                    });
-                    break;
-                case 200:                     
-                    loader.classList.add('hidden');
-                    qaResults.classList.remove('hidden');
-                    qaResults.classList.add('fade-in');
-                    
-                    // Complete progress bar
-                    progressFill.style.width = '100%';
-                    
-                    var json = await response.json();
-                    console.log('Analysis response:', json);
-                    
-                    // Display Q&A data
-                    if (json.qa_data && json.qa_data.length > 0) {
-                        console.log('Q&A data found:', json.qa_data.length, 'items');
-                        qaList.innerHTML = '';
-                        json.qa_data.forEach((qa, index) => {
-                            console.log('Processing Q&A item:', qa);
-                            const qaItem = document.createElement('div');
-                            qaItem.className = 'qa-item';
-                            qaItem.innerHTML = `
-                                <div class="qa-question">
-                                    <span class="qa-number">${index + 1}</span>
-                                    ${qa.question}
-                                </div>
-                                <div class="qa-answer">${qa.answer}</div>
-                            `;
-                            qaList.appendChild(qaItem);
-                        });
-                    } else {
-                        console.log('No Q&A data found in response');
-                        qaList.innerHTML = '<p class="text-muted">No Q&A data available</p>';
-                    }
-                    
-                    // Set up download button
-                    downloadBtn.setAttribute('href', "../"+json.output_file);
-                    break;
-                default:
-                    Swal.fire({
-                        icon: 'error',
-                        title: 'Server Error',
-                        text: "There is a "+response.status+" error. Please try again later.",
-                        confirmButtonColor: "#667eea"
-                    });
-            }
-        }
-
-        function resetUploadButton() {
-            uploadBtn.disabled = false;
-            uploadBtn.innerHTML = '<i class="fas fa-magic me-2"></i>Generate Q&A';
+            
+            document.getElementById('results').style.display = 'block';
         }
     </script>
 </body>
-</html>
+</html> 
