@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Form, Request, Response, File, HTTPException, status, UploadFile
+from fastapi import FastAPI, Form, Request, Response, File, Depends, HTTPException, status, UploadFile
 from fastapi.responses import RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -64,35 +64,27 @@ def get_document_loader(file_path: str):
         raise ValueError(f"Unsupported file type: {file_ext}")
 
 @app.get("/")
-async def read_root():
-    return templates.TemplateResponse("index.html", {"request": {}})
+async def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def chat(request: Request, pdf_file: bytes = File(), filename: str = Form(...)):
     try:
-        # Validate file type
-        if not file.filename.lower().endswith(('.pdf', '.docx')):
-            raise HTTPException(
-                status_code=400,
-                detail="Only PDF and DOCX files are allowed"
-            )
-        
-        # Save the file
-        file_path = UPLOAD_DIR / file.filename
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-        
-        logger.info(f"File saved successfully: {file_path}")
-        return JSONResponse(content={
-            "msg": "success",
-            "pdf_filename": file.filename
-        })
-        
+        base_folder = 'static/docs/'
+        if not os.path.isdir(base_folder):
+            os.mkdir(base_folder)
+        pdf_filename = os.path.join(base_folder, filename)
+
+        async with aiofiles.open(pdf_filename, 'wb') as f:
+            await f.write(pdf_file)
+     
+        response_data = jsonable_encoder(json.dumps({"msg": 'success',"pdf_filename": pdf_filename}))
+        res = Response(response_data)
+        return res
     except Exception as e:
         logger.error(f"Error uploading file: {str(e)}")
         raise HTTPException(
@@ -100,75 +92,38 @@ async def upload_file(file: UploadFile = File(...)):
             detail=f"Error uploading file: {str(e)}"
         )
 
-def get_csv(file_path: str) -> tuple[str, list[dict], list[str]]:
-    """Generate CSV file from Q&A pairs and return document content."""
+def get_csv(file_path):
     try:
-        logger.info(f"Starting CSV generation for file: {file_path}")
-        
-        # Get Q&A pairs from LLM pipeline
         output_file, qa_list = llm_pipeline(file_path)
         
-        # Extract document content
-        loader = get_document_loader(file_path)
-        documents = loader.load()
-        content_sections = []
+        # The qa_list already contains the questions and answers
+        # We just need to create the CSV file
+        base_folder = 'static/output/'
+        if not os.path.isdir(base_folder):
+            os.mkdir(base_folder)
         
-        for doc in documents:
-            # Split content into sections (e.g., by paragraphs)
-            sections = [section.strip() for section in doc.page_content.split('\n\n') if section.strip()]
-            content_sections.extend(sections)
+        # Use the output file path returned by llm_pipeline
+        csv_file_path = output_file
         
-        # Generate CSV file
-        output_path = OUTPUT_DIR / "QA.csv"
-        with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
-            csv_writer = csv.writer(csvfile)
-            csv_writer.writerow(["Question", "Answer"])
-            
-            for qa in qa_list:
-                csv_writer.writerow([qa["question"], qa["answer"]])
-        
-        logger.info(f"CSV file generated successfully: {output_path}")
-        return str(output_path), qa_list, content_sections
-        
+        # Return the file path and qa_data for frontend
+        return csv_file_path, qa_list
     except Exception as e:
         logger.error(f"Error generating CSV: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=f"Error generating CSV: {str(e)}"
         )
 
 @app.post("/analyze")
-async def analyze_document(pdf_filename: str = Form(...)):
+async def chat(request: Request, pdf_filename: str = Form(...)):
     try:
-        # Validate file exists
-        file_path = UPLOAD_DIR / pdf_filename
-        if not file_path.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"File {pdf_filename} not found"
-            )
-
-        # Generate CSV and get content
-        csv_filename = generate_csv(str(file_path))
-        content = get_document_content(str(file_path))
-        
-        # Generate Q&A pairs
-        qa_list = generate_qa_pairs(content)
-        
-        # Ensure all data is JSON serializable
-        response_data = {
-            "qa_list": [
-                {
-                    "question": str(qa["question"]),
-                    "answer": str(qa["answer"])
-                }
-                for qa in qa_list
-            ],
-            "document_content": [str(section) for section in content]
-        }
-        
-        return JSONResponse(content=response_data)
-        
+        output_file, qa_data = get_csv(pdf_filename)
+        response_data = jsonable_encoder(json.dumps({
+            "output_file": output_file,
+            "qa_data": qa_data
+        }))
+        res = Response(response_data)
+        return res
     except Exception as e:
         logger.error(f"Error analyzing document: {str(e)}")
         raise HTTPException(

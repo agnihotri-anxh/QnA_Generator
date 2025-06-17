@@ -320,6 +320,7 @@ def file_processing(file_path: str) -> Tuple[List[Document], List[Document]]:
 
         # Split text for question generation
         splitter_ques_gen = TokenTextSplitter(
+            model_name='gpt-3.5-turbo',
             chunk_size=10000,
             chunk_overlap=200
         )
@@ -329,6 +330,7 @@ def file_processing(file_path: str) -> Tuple[List[Document], List[Document]]:
         
         # Split text for answer generation
         splitter_ans_gen = TokenTextSplitter(
+            model_name='gpt-3.5-turbo',
             chunk_size=1000,
             chunk_overlap=100
         )
@@ -361,7 +363,7 @@ def initialize_embeddings():
     try:
         logger.info("Initializing embeddings with all-MiniLM-L6-v2 model...")
         embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2",
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
             model_kwargs={'device': 'cpu'},
             encode_kwargs={'normalize_embeddings': True}
         )
@@ -393,22 +395,20 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
         
         # Process file
         logger.info(f"Starting file processing for: {file_path}")
-        documents, chunks = file_processing(file_path)
+        document_ques_gen, document_answer_gen = file_processing(file_path)
         
         # Initialize embeddings
         embeddings = initialize_embeddings()
         
         # Create vector store
-        vector_store = create_vector_store(documents, embeddings)
+        vector_store = create_vector_store(document_ques_gen, embeddings)
         
         # Initialize LLM for question generation
         try:
             logger.info("Initializing question generation LLM...")
-            llm_ques_gen = ChatGroq(
-                groq_api_key=GROQ_API_KEY,
-                model_name="gemma2-9b-it",
+            llm_ques_gen_pipeline = ChatGroq(
                 temperature=0.3,
-                max_tokens=MAX_TOKENS
+                model_name="gemma2-9b-it"
             )
             logger.info("Question generation LLM initialized successfully")
         except Exception as e:
@@ -435,7 +435,7 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
         try:
             logger.info("Generating questions...")
             ques_gen_chain = load_summarize_chain(
-                llm=llm_ques_gen,
+                llm=llm_ques_gen_pipeline,
                 chain_type="refine",
                 verbose=True,
                 question_prompt=PROMPT_QUESTIONS,
@@ -444,7 +444,7 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
             
             for attempt in range(MAX_RETRIES):
                 try:
-                    questions = ques_gen_chain.run(documents)
+                    questions = ques_gen_chain.run(document_ques_gen)
                     break
                 except Exception as e:
                     if "rate_limit_exceeded" in str(e).lower() or "429" in str(e):
@@ -469,10 +469,8 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
         try:
             logger.info("Initializing answer generation...")
             llm_answer_gen = ChatGroq(
-                groq_api_key=GROQ_API_KEY,
-                model_name="gemma2-9b-it",
                 temperature=0.1,
-                max_tokens=MAX_TOKENS
+                model_name="gemma2-9b-it"
             )
             
             answer_chain = RetrievalQA.from_chain_type(
