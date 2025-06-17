@@ -124,18 +124,43 @@ def get_csv(file_path):
 @app.post("/analyze")
 async def chat(request: Request, pdf_filename: str = Form(...)):
     try:
+        logger.info(f"Starting analysis for file: {pdf_filename}")
+        
+        # Validate file exists
+        if not os.path.exists(pdf_filename):
+            logger.error(f"File not found: {pdf_filename}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"File {pdf_filename} not found"
+            )
+        
+        logger.info("Calling get_csv function...")
         output_file, qa_data = get_csv(pdf_filename)
+        logger.info(f"Analysis completed. Output file: {output_file}, Q&A count: {len(qa_data)}")
+        
         response_data = jsonable_encoder(json.dumps({
             "output_file": output_file,
             "qa_data": qa_data
         }))
         res = Response(response_data)
         return res
+        
     except Exception as e:
         logger.error(f"Error analyzing document: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Return a more specific error message
+        error_detail = f"Error analyzing document: {str(e)}"
+        if "memory" in str(e).lower():
+            error_detail = "Document processing failed due to memory constraints. Please try with a smaller document."
+        elif "timeout" in str(e).lower():
+            error_detail = "Document processing timed out. Please try again."
+        
         raise HTTPException(
             status_code=500,
-            detail=f"Error analyzing document: {str(e)}"
+            detail=error_detail
         )
 
 @app.get("/download/{filename}")
