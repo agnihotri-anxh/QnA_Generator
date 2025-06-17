@@ -13,7 +13,7 @@ from langchain_groq import ChatGroq
 from pathlib import Path
 import logging
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import List, Tuple, Dict, Optional
 import re
 import time
@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 import json
 import signal
 import functools
+import threading
 
 # Configure logging with more detailed format
 logging.basicConfig(
@@ -400,25 +401,17 @@ def create_vector_store(documents, embeddings):
             logger.warning(f"Attempt {attempt + 1} failed, retrying...")
             time.sleep(2 ** attempt)  # Exponential backoff
 
-def timeout_handler(signum, frame):
-    raise TimeoutError("Operation timed out")
-
-def timeout_decorator(seconds):
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # Set the signal handler
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(seconds)
-            try:
-                result = func(*args, **kwargs)
-            finally:
-                signal.alarm(0)  # Disable the alarm
+def run_with_timeout(func, args, timeout_seconds=300):
+    """Run a function with a timeout using threading."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func, *args)
+        try:
+            result = future.result(timeout=timeout_seconds)
             return result
-        return wrapper
-    return decorator
+        except FutureTimeoutError:
+            logger.error(f"Function {func.__name__} timed out after {timeout_seconds} seconds")
+            raise TimeoutError(f"Operation timed out after {timeout_seconds} seconds")
 
-@timeout_decorator(300)  # 5 minutes timeout
 def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
     """Main LLM pipeline with improved error handling and memory management."""
     try:
@@ -427,25 +420,6 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
         # Process file
         logger.info(f"Starting file processing for: {file_path}")
         document_ques_gen, document_answer_gen = file_processing(file_path)
-        
-        # Try to initialize embeddings, fallback if it fails
-        try:
-            embeddings = initialize_embeddings()
-            use_embeddings = True
-            logger.info("Embeddings initialized successfully")
-        except Exception as e:
-            logger.warning(f"Failed to initialize embeddings, using fallback mode: {str(e)}")
-            use_embeddings = False
-        
-        # Create vector store only if embeddings are available
-        if use_embeddings:
-            try:
-                vector_store = create_vector_store(document_ques_gen, embeddings)
-                del embeddings
-                gc.collect()
-            except Exception as e:
-                logger.warning(f"Failed to create vector store, using fallback mode: {str(e)}")
-                use_embeddings = False
         
         # Initialize LLM for question generation
         try:
@@ -513,66 +487,34 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
             logger.error(f"Error generating questions: {str(e)}")
             raise Exception(f"Failed to generate questions: {str(e)}")
 
-        # Generate answers based on whether embeddings are available
+        # Generate answers using simple approach (no embeddings to avoid memory issues)
         try:
-            logger.info("Generating answers...")
+            logger.info("Generating answers using simple approach...")
             qa_list = []
+            llm_answer_gen = ChatGroq(temperature=0.1, model_name="gemma2-9b-it")
             
-            if use_embeddings:
-                # Use vector store for answer generation
-                llm_answer_gen = ChatGroq(temperature=0.1, model_name="gemma2-9b-it")
-                answer_chain = RetrievalQA.from_chain_type(
-                    llm=llm_answer_gen,
-                    chain_type="stuff",
-                    retriever=vector_store.as_retriever()
-                )
-                
-                for i, question in enumerate(filtered_ques_list):
-                    try:
-                        answer = answer_chain.run(question)
-                        qa_list.append({
-                            "question": question,
-                            "answer": answer.strip()
-                        })
+            for i, question in enumerate(filtered_ques_list):
+                try:
+                    # Use a simple prompt for answer generation
+                    prompt = f"Answer this question based on the document content: {question}"
+                    answer = llm_answer_gen.invoke(prompt)
+                    qa_list.append({
+                        "question": question,
+                        "answer": answer.content.strip() if hasattr(answer, 'content') else str(answer).strip()
+                    })
+                    
+                    if (i + 1) % 5 == 0:
+                        gc.collect()
                         
-                        if (i + 1) % 5 == 0:
-                            gc.collect()
-                            
-                    except Exception as e:
-                        logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
-                        qa_list.append({
-                            "question": question,
-                            "answer": "Error generating answer. Please try again."
-                        })
-                
-                del answer_chain, llm_answer_gen, vector_store
-                gc.collect()
-            else:
-                # Fallback: generate simple answers without embeddings
-                llm_answer_gen = ChatGroq(temperature=0.1, model_name="gemma2-9b-it")
-                
-                for i, question in enumerate(filtered_ques_list):
-                    try:
-                        # Use a simple prompt for answer generation
-                        prompt = f"Answer this question based on the document content: {question}"
-                        answer = llm_answer_gen.invoke(prompt)
-                        qa_list.append({
-                            "question": question,
-                            "answer": answer.content.strip() if hasattr(answer, 'content') else str(answer).strip()
-                        })
-                        
-                        if (i + 1) % 5 == 0:
-                            gc.collect()
-                            
-                    except Exception as e:
-                        logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
-                        qa_list.append({
-                            "question": question,
-                            "answer": "Error generating answer. Please try again."
-                        })
-                
-                del llm_answer_gen
-                gc.collect()
+                except Exception as e:
+                    logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
+                    qa_list.append({
+                        "question": question,
+                        "answer": "Error generating answer. Please try again."
+                    })
+            
+            del llm_answer_gen
+            gc.collect()
                     
             logger.info(f"Generated answers for {len(qa_list)} questions")
             
