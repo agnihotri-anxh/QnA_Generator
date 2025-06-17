@@ -365,12 +365,22 @@ def initialize_embeddings():
         embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
             model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
+            encode_kwargs={'normalize_embeddings': True, 'batch_size': 8}
         )
         return embeddings
     except Exception as e:
-        logger.error(f"Error initializing embeddings: {str(e)}")
-        raise
+        logger.warning(f"Failed to load all-MiniLM-L6-v2, trying lighter model: {str(e)}")
+        try:
+            logger.info("Initializing embeddings with lighter model...")
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True, 'batch_size': 4}
+            )
+            return embeddings
+        except Exception as e2:
+            logger.error(f"Error initializing embeddings with fallback model: {str(e2)}")
+            raise
 
 def create_vector_store(documents, embeddings):
     """Create vector store with retry mechanism."""
@@ -389,7 +399,7 @@ def create_vector_store(documents, embeddings):
             time.sleep(2 ** attempt)  # Exponential backoff
 
 def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
-    """Main LLM pipeline with improved error handling."""
+    """Main LLM pipeline with improved error handling and memory management."""
     try:
         logger.info("Starting LLM pipeline...")
         
@@ -397,11 +407,15 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
         logger.info(f"Starting file processing for: {file_path}")
         document_ques_gen, document_answer_gen = file_processing(file_path)
         
-        # Initialize embeddings
+        # Initialize embeddings with memory optimization
         embeddings = initialize_embeddings()
         
-        # Create vector store
+        # Create vector store with memory management
         vector_store = create_vector_store(document_ques_gen, embeddings)
+        
+        # Clear embeddings from memory after vector store creation
+        del embeddings
+        gc.collect()
         
         # Initialize LLM for question generation
         try:
@@ -460,6 +474,10 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
             ques_list = questions.split("\n")
             filtered_ques_list = [q.strip() for q in ques_list if q.strip() and (q.strip().endswith('?') or q.strip().endswith('.'))]
             logger.info(f"Generated {len(filtered_ques_list)} questions")
+            
+            # Clear question generation chain from memory
+            del ques_gen_chain, llm_ques_gen_pipeline
+            gc.collect()
                 
         except Exception as e:
             logger.error(f"Error generating questions: {str(e)}")
@@ -483,25 +501,35 @@ def llm_pipeline(file_path: str) -> Tuple[str, List[dict]]:
             logger.error(f"Error initializing answer generation: {str(e)}")
             raise Exception(f"Failed to initialize answer generation: {str(e)}")
 
-        # Generate answers
+        # Generate answers with memory management
         try:
             logger.info("Generating answers...")
             qa_list = []
-            for question in filtered_ques_list:
+            for i, question in enumerate(filtered_ques_list):
                 try:
                     answer = answer_chain.run(question)
                     qa_list.append({
                         "question": question,
                         "answer": answer.strip()
                     })
+                    
+                    # Clear memory every 5 questions
+                    if (i + 1) % 5 == 0:
+                        gc.collect()
+                        
                 except Exception as e:
                     logger.error(f"Error generating answer for question: {question}. Error: {str(e)}")
                     qa_list.append({
                         "question": question,
                         "answer": "Error generating answer. Please try again."
                     })
-                gc.collect()
+                    
             logger.info(f"Generated answers for {len(qa_list)} questions")
+            
+            # Clear answer generation chain from memory
+            del answer_chain, llm_answer_gen, vector_store
+            gc.collect()
+            
         except Exception as e:
             logger.error(f"Error in answer generation: {str(e)}")
             raise Exception(f"Failed to generate answers: {str(e)}")
