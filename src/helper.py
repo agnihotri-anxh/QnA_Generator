@@ -14,9 +14,16 @@ from src.prompt import *
 # Groq authentication
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY environment variable is not set. Please create a .env file with your Groq API key.")
-os.environ["GROQ_API_KEY"] = GROQ_API_KEY
+
+# Check if API key is properly configured
+if not GROQ_API_KEY or GROQ_API_KEY == "your_groq_api_key_here":
+    print("WARNING: GROQ_API_KEY environment variable is not set or is invalid.")
+    print("Please set a valid Groq API key in your environment variables.")
+    print("The application will start but Q&A generation will fail.")
+    # Don't raise an exception here to allow the app to start
+    GROQ_API_KEY = None
+else:
+    os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 def file_processing(file_path):
     """Process the input file and return documents for question and answer generation."""
@@ -69,6 +76,10 @@ def file_processing(file_path):
 def llm_pipeline(file_path):
     """Main LLM pipeline for question and answer generation."""
     try:
+        # Check if API key is available
+        if not GROQ_API_KEY:
+            raise Exception("GROQ_API_KEY is not configured. Please set a valid Groq API key in your environment variables.")
+        
         document_ques_gen, document_answer_gen = file_processing(file_path)
         
         # Initialize LLM for question generation
