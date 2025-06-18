@@ -10,6 +10,7 @@ from langchain.chains import RetrievalQA
 import os
 from dotenv import load_dotenv
 from src.prompt import *
+import gc
 
 # Groq authentication
 load_dotenv()
@@ -33,41 +34,44 @@ def file_processing(file_path):
         data = loader.load()
         
         # Limit pages to prevent memory issues
-        if len(data) > 10:
-            print(f"Document has {len(data)} pages, limiting to first 10 pages")
-            data = data[:10]
+        if len(data) > 8:  # Reduced from 10 to 8
+            print(f"Document has {len(data)} pages, limiting to first 8 pages")
+            data = data[:8]
         
         question_gen = ''
         for page in data:
             question_gen += page.page_content
             # Limit text length
-            if len(question_gen) > 25000:
+            if len(question_gen) > 20000:  # Reduced from 25000 to 20000
                 print("Text too long, truncating")
-                question_gen = question_gen[:25000]
+                question_gen = question_gen[:20000]
                 break
 
         splitter_ques_gen = TokenTextSplitter(
             model_name='gpt-3.5-turbo',
-            chunk_size=2000,  # Reduced chunk size for memory efficiency
-            chunk_overlap=50  # Reduced overlap
+            chunk_size=1500,  # Reduced chunk size for memory efficiency
+            chunk_overlap=30  # Reduced overlap
         )
         
         chunks_ques_gen = splitter_ques_gen.split_text(question_gen)
         
         # Limit chunks
-        if len(chunks_ques_gen) > 5:  # Reduced from 10 to 5
-            print(f"Too many chunks ({len(chunks_ques_gen)}), limiting to 5")
-            chunks_ques_gen = chunks_ques_gen[:5]
+        if len(chunks_ques_gen) > 4:  # Reduced from 5 to 4
+            print(f"Too many chunks ({len(chunks_ques_gen)}), limiting to 4")
+            chunks_ques_gen = chunks_ques_gen[:4]
         
         document_ques_gen = [Document(page_content=t) for t in chunks_ques_gen]
         
         splitter_ans_gen = TokenTextSplitter(
             model_name='gpt-3.5-turbo',
-            chunk_size=500,  # Further reduced from 1000 to 500
-            chunk_overlap=25  # Reduced overlap
+            chunk_size=400,  # Further reduced from 500 to 400
+            chunk_overlap=20  # Reduced overlap
         )
         
         document_answer_gen = splitter_ans_gen.split_documents(document_ques_gen)
+
+        # Force garbage collection
+        gc.collect()
 
         return document_ques_gen, document_answer_gen
     except Exception as e:
@@ -108,7 +112,10 @@ def llm_pipeline(file_path):
             refine_prompt=REFINE_PROMPT_QUESTIONS
         )
         
-        ques = ques_gen_chain.run(document_ques_gen)
+        # Use invoke() instead of run() to fix deprecation warning
+        ques = ques_gen_chain.invoke({"input_documents": document_ques_gen})
+        if isinstance(ques, dict) and 'output_text' in ques:
+            ques = ques['output_text']
         
         # Initialize embeddings and vector store
         embeddings = HuggingFaceEmbeddings(
@@ -123,10 +130,10 @@ def llm_pipeline(file_path):
         ques_list = ques.split("\n")
         filtered_ques_list = [element for element in ques_list if element.endswith('?') or element.endswith('.')]
         
-        # Generate 10 questions for CSV
-        if len(filtered_ques_list) > 10:
-            print(f"Too many questions ({len(filtered_ques_list)}), limiting to 10")
-            filtered_ques_list = filtered_ques_list[:10]
+        # Generate 8 questions for CSV (reduced from 10)
+        if len(filtered_ques_list) > 8:
+            print(f"Too many questions ({len(filtered_ques_list)}), limiting to 8")
+            filtered_ques_list = filtered_ques_list[:8]
         
         # Create answer generation chain
         answer_generation_chain = RetrievalQA.from_chain_type(
@@ -134,6 +141,9 @@ def llm_pipeline(file_path):
             chain_type="stuff",
             retriever=vector_store.as_retriever()
         )
+        
+        # Force garbage collection
+        gc.collect()
             
         return answer_generation_chain, filtered_ques_list
     except Exception as e:

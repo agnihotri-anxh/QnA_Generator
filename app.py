@@ -12,6 +12,7 @@ from src.helper import llm_pipeline
 from pathlib import Path
 import logging
 from contextlib import asynccontextmanager
+import gc
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +45,16 @@ templates = Jinja2Templates(directory="templates")
 @app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+@app.head("/")
+async def head_index():
+    """Handle HEAD requests for health checks"""
+    return Response(status_code=200)
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Return a simple favicon response"""
+    return Response(status_code=204)  # No content but successful
 
 @app.get("/health")
 async def health_check():
@@ -84,6 +95,10 @@ async def upload_file(pdf_file: bytes = File(), filename: str = Form(...)):
 def get_csv(file_path):
     try:
         logger.info(f"Starting analysis for file: {file_path}")
+        
+        # Force garbage collection before processing
+        gc.collect()
+        
         answer_generation_chain, ques_list = llm_pipeline(file_path)
         
         if not ques_list:
@@ -101,13 +116,22 @@ def get_csv(file_path):
             for i, question in enumerate(ques_list):
                 logger.info(f"Processing question {i+1}/{len(ques_list)}: {question[:50]}...")
                 try:
-                    answer = answer_generation_chain.run(question)
+                    # Use invoke() instead of run() to fix deprecation warning
+                    answer = answer_generation_chain.invoke({"query": question})
+                    if isinstance(answer, dict) and 'result' in answer:
+                        answer = answer['result']
+                    
                     if not answer or answer.strip() == "":
                         answer = "No answer generated for this question."
                     
                     all_qa_data.append({"question": question, "answer": answer})
                     csv_writer.writerow([question, answer])
                     logger.info(f"Question {i+1} processed successfully")
+                    
+                    # Force garbage collection after each question to manage memory
+                    if i % 3 == 0:  # Every 3 questions
+                        gc.collect()
+                        
                 except Exception as e:
                     logger.error(f"Error processing question {i+1}: {str(e)}")
                     all_qa_data.append({"question": question, "answer": f"Error generating answer: {str(e)}"})
@@ -117,6 +141,10 @@ def get_csv(file_path):
         display_qa_data = all_qa_data[:5]
         
         logger.info(f"Analysis completed. Generated {len(all_qa_data)} Q&A pairs for CSV, displaying {len(display_qa_data)} in UI")
+        
+        # Force garbage collection after processing
+        gc.collect()
+        
         return str(output_file), display_qa_data
     except Exception as e:
         logger.error(f"Error in get_csv: {str(e)}")

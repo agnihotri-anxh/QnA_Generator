@@ -14,3 +14,4 @@ python-multipart
 PyPDF2
 faiss-cpu
 python-dotenv
+psutil

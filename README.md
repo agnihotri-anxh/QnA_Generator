@@ -1,69 +1,131 @@
 # QA Generator
 
-A simple application that generates questions and answers from uploaded PDF documents using Groq's Mistral Saba 24B model.
+A FastAPI-based application that generates questions and answers from PDF documents using Groq's LLM API.
 
 ## Features
 
-- Upload PDF documents
-- Generate questions and answers using Groq's Mistral Saba 24B model
+- Upload PDF documents (max 5MB)
+- Generate intelligent questions and answers
 - Download results as CSV
-- Simple and clean web interface
+- Modern, responsive UI
+- Memory-optimized processing
 
-## Setup
+## Installation
 
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd QA_Genrator
+```
 
-2. **Set up environment variables:**
-   Create a `.env` file in the project root:
-   ```
-   GROQ_API_KEY=your_groq_api_key_here
-   ```
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-3. **Run the application:**
-   ```bash
-   python app.py
-   ```
+3. Set up environment variables:
+Create a `.env` file in the root directory:
+```
+GROQ_API_KEY=your_groq_api_key_here
+```
 
-4. **Access the application:**
-   Open your browser and go to `http://localhost:10000`
+## Running the Application
 
-## Usage
+### Option 1: Using the optimized startup script (Recommended)
+```bash
+python start_server.py
+```
 
-1. Upload a PDF document (max 5MB)
-2. Click "Upload and Analyze"
-3. Wait for processing to complete
-4. View generated questions and answers
-5. Download the CSV file
+### Option 2: Direct execution
+```bash
+python app.py
+```
 
-## Project Structure
+### Option 3: Using uvicorn directly
+```bash
+uvicorn app:app --host 0.0.0.0 --port 10000
+```
+
+The application will be available at `http://localhost:10000`
+
+## Memory Optimization
+
+The application includes several memory optimization features:
+
+- Automatic garbage collection during processing
+- Reduced chunk sizes and page limits
+- Memory monitoring and warnings
+- Single worker configuration
+- Environment-specific optimizations
+
+## Troubleshooting
+
+### Common Issues
+
+1. **405 Method Not Allowed for HEAD requests**
+   - ✅ Fixed: Added HEAD method support
+
+2. **404 Not Found for favicon.ico**
+   - ✅ Fixed: Added favicon route
+
+3. **Memory limit exceeded**
+   - ✅ Fixed: Implemented memory optimization
+   - Reduced processing limits
+   - Added garbage collection
+
+4. **LangChain deprecation warnings**
+   - ✅ Fixed: Updated to use `invoke()` instead of `run()`
+
+### Memory Issues
+
+If you encounter memory issues:
+
+1. Ensure you have at least 1GB of available RAM
+2. Close other memory-intensive applications
+3. Use the optimized startup script: `python start_server.py`
+4. Consider reducing the file size of your PDF documents
+
+### API Key Issues
+
+If you get API key errors:
+
+1. Ensure your `.env` file contains a valid `GROQ_API_KEY`
+2. Get your API key from [Groq Console](https://console.groq.com/)
+3. Restart the application after setting the API key
+
+## File Structure
 
 ```
-QA_Generator/
+QA_Genrator/
 ├── app.py                 # Main FastAPI application
+├── start_server.py        # Optimized startup script
+├── requirements.txt       # Python dependencies
+├── config.env            # Environment configuration
 ├── src/
-│   ├── helper.py         # LLM pipeline and processing
+│   ├── helper.py         # LLM processing logic
 │   └── prompt.py         # Prompt templates
 ├── templates/
 │   └── index.html        # Web interface
 ├── static/
-│   ├── docs/            # Uploaded documents
-│   └── output/          # Generated CSV files
-├── requirements.txt      # Python dependencies
-└── README.md            # This file
+│   ├── docs/             # Uploaded PDFs
+│   └── output/           # Generated CSV files
+└── uploads/              # Temporary upload directory
 ```
 
-## Requirements
+## API Endpoints
 
-- Python 3.8+
-- Groq API key
-- PDF documents to analyze
+- `GET /` - Main application interface
+- `POST /upload` - Upload PDF file
+- `POST /analyze` - Generate Q&A from uploaded file
+- `GET /download/{filename}` - Download generated CSV
+- `GET /health` - Health check endpoint
 
-## Limitations
+## Environment Variables
 
-- Maximum file size: 5MB
-- Maximum pages processed: 10
-- Maximum questions generated: 5
-- Supports PDF files only
+- `GROQ_API_KEY` - Your Groq API key (required)
+- `PORT` - Server port (default: 10000)
+- `HOST` - Server host (default: 0.0.0.0)
+
+## License
+
+This project is licensed under the MIT License.
