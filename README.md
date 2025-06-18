@@ -9,18 +9,13 @@ A FastAPI-based application that generates questions and answers from PDF docume
 - Download results as CSV
 - Modern, responsive UI
 - Memory-optimized processing
-- Deployed on Vercel with global CDN
 
-## Live Demo
-
-Your app is deployed on Vercel! 🚀
-
-## Installation (Local Development)
+## Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/agnihotri-anxh/QnA_Generator.git
-cd QnA_Generator
+git clone <repository-url>
+cd QA_Genrator
 ```
 
 2. Install dependencies:
@@ -34,56 +29,24 @@ Create a `.env` file in the root directory:
 GROQ_API_KEY=your_groq_api_key_here
 ```
 
-4. Run the application:
+## Running the Application
+
+### Option 1: Using the optimized startup script (Recommended)
+```bash
+python start_server.py
+```
+
+### Option 2: Direct execution
 ```bash
 python app.py
 ```
 
-The application will be available at `http://localhost:10000`
-
-## Deploy to Vercel
-
-### Quick Deployment Steps:
-
-1. **Go to [vercel.com](https://vercel.com)**
-2. **Sign up/Login with GitHub**
-3. **Click "New Project"**
-4. **Import your GitHub repository** (`agnihotri-anxh/QnA_Generator`)
-5. **Configure project:**
-   - Framework Preset: `Other`
-   - Root Directory: `./`
-   - Build Command: `pip install -r requirements.txt`
-   - Output Directory: `./`
-6. **Click "Deploy"**
-7. **Add Environment Variables:**
-   - Go to Project Settings → Environment Variables
-   - Add `GROQ_API_KEY` with your actual Groq API key
-8. **Redeploy**
-
-### Vercel Configuration
-
-The project includes `vercel.json` for optimal Vercel deployment:
-
-```json
-{
-  "version": 2,
-  "builds": [
-    {
-      "src": "app.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "app.py"
-    }
-  ],
-  "env": {
-    "PYTHONPATH": "."
-  }
-}
+### Option 3: Using uvicorn directly
+```bash
+uvicorn app:app --host 0.0.0.0 --port 10000
 ```
+
+The application will be available at `http://localhost:10000`
 
 ## Memory Optimization
 
@@ -92,24 +55,61 @@ The application includes several memory optimization features:
 - Automatic garbage collection during processing
 - Reduced chunk sizes and page limits
 - Memory monitoring and warnings
+- Single worker configuration
 - Environment-specific optimizations
-- Optimized for Vercel's serverless environment
+
+## Troubleshooting
+
+### Common Issues
+
+1. **405 Method Not Allowed for HEAD requests**
+   - ✅ Fixed: Added HEAD method support
+
+2. **404 Not Found for favicon.ico**
+   - ✅ Fixed: Added favicon route
+
+3. **Memory limit exceeded**
+   - ✅ Fixed: Implemented memory optimization
+   - Reduced processing limits
+   - Added garbage collection
+
+4. **LangChain deprecation warnings**
+   - ✅ Fixed: Updated to use `invoke()` instead of `run()`
+
+### Memory Issues
+
+If you encounter memory issues:
+
+1. Ensure you have at least 1GB of available RAM
+2. Close other memory-intensive applications
+3. Use the optimized startup script: `python start_server.py`
+4. Consider reducing the file size of your PDF documents
+
+### API Key Issues
+
+If you get API key errors:
+
+1. Ensure your `.env` file contains a valid `GROQ_API_KEY`
+2. Get your API key from [Groq Console](https://console.groq.com/)
+3. Restart the application after setting the API key
 
 ## File Structure
 
 ```
 QA_Genrator/
 ├── app.py                 # Main FastAPI application
-├── vercel.json           # Vercel configuration
-├── requirements.txt      # Python dependencies
+├── start_server.py        # Optimized startup script
+├── requirements.txt       # Python dependencies
+├── config.env            # Environment configuration
 ├── src/
 │   ├── helper.py         # LLM processing logic
 │   └── prompt.py         # Prompt templates
 ├── templates/
 │   └── index.html        # Web interface
-└── static/               # Static files
-    ├── docs/             # Uploaded PDFs
-    └── output/           # Generated CSV files
+├── static/
+│   ├── docs/             # Uploaded PDFs
+│   └── output/           # Generated CSV files
+└── uploads/              # Temporary upload directory
 ```
 
 ## API Endpoints
@@ -123,37 +123,8 @@ QA_Genrator/
 ## Environment Variables
 
 - `GROQ_API_KEY` - Your Groq API key (required)
-- `PORT` - Server port (set automatically by Vercel)
-- `HOST` - Server host (set automatically by Vercel)
-
-## Vercel Advantages
-
-- ✅ **Global CDN** - Fast worldwide access
-- ✅ **Automatic HTTPS** - Secure by default
-- ✅ **Serverless** - Pay only for usage
-- ✅ **Easy deployment** - Git integration
-- ✅ **Good Python support** - FastAPI compatible
-- ✅ **Free tier** - Generous limits
-
-## Troubleshooting
-
-### Common Issues:
-
-1. **Build fails:**
-   - Check if all dependencies are in `requirements.txt`
-   - Ensure Python version is compatible
-
-2. **Environment variables not working:**
-   - Redeploy after adding environment variables
-   - Check variable names are correct
-
-3. **Memory issues:**
-   - Use smaller PDF files (1-3 pages)
-   - The app is optimized for Vercel's memory limits
-
-4. **Timeout errors:**
-   - Use smaller documents
-   - The app is optimized for quick processing
+- `PORT` - Server port (default: 10000)
+- `HOST` - Server host (default: 0.0.0.0)
 
 ## License
 
