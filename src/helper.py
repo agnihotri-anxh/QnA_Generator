@@ -11,6 +11,7 @@ import os
 from dotenv import load_dotenv
 from src.prompt import *
 import gc
+import psutil
 
 # Groq authentication
 load_dotenv()
@@ -26,52 +27,75 @@ if not GROQ_API_KEY or GROQ_API_KEY == "your_groq_api_key_here":
 else:
     os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
+def check_memory():
+    """Check available memory and return True if sufficient"""
+    try:
+        memory = psutil.virtual_memory()
+        available_gb = memory.available / (1024**3)
+        print(f"Available memory: {available_gb:.2f} GB")
+        return available_gb > 0.5  # Need at least 500MB
+    except:
+        return True  # If we can't check, assume it's OK
+
+def force_cleanup():
+    """Force aggressive memory cleanup"""
+    gc.collect()
+    gc.collect()
+    gc.collect()
+
 def file_processing(file_path):
     """Process the input file and return documents for question and answer generation."""
     try:
-        # Load data from PDF
+        # Check memory before processing
+        if not check_memory():
+            raise Exception("Insufficient memory available for processing")
+        
+        # Load data from PDF with strict limits
         loader = PyPDFLoader(file_path)
         data = loader.load()
         
-        # Limit pages to prevent memory issues
-        if len(data) > 8:  # Reduced from 10 to 8
-            print(f"Document has {len(data)} pages, limiting to first 8 pages")
-            data = data[:8]
+        # Very aggressive page limiting for memory-constrained environments
+        if len(data) > 4:  # Reduced from 8 to 4
+            print(f"Document has {len(data)} pages, limiting to first 4 pages")
+            data = data[:4]
         
         question_gen = ''
         for page in data:
             question_gen += page.page_content
-            # Limit text length
-            if len(question_gen) > 20000:  # Reduced from 25000 to 20000
+            # Very strict text length limit
+            if len(question_gen) > 15000:  # Reduced from 20000 to 15000
                 print("Text too long, truncating")
-                question_gen = question_gen[:20000]
+                question_gen = question_gen[:15000]
                 break
+
+        # Force cleanup after text extraction
+        force_cleanup()
 
         splitter_ques_gen = TokenTextSplitter(
             model_name='gpt-3.5-turbo',
-            chunk_size=1500,  # Reduced chunk size for memory efficiency
-            chunk_overlap=30  # Reduced overlap
+            chunk_size=1000,  # Reduced from 1500 to 1000
+            chunk_overlap=20  # Reduced overlap
         )
         
         chunks_ques_gen = splitter_ques_gen.split_text(question_gen)
         
-        # Limit chunks
-        if len(chunks_ques_gen) > 4:  # Reduced from 5 to 4
-            print(f"Too many chunks ({len(chunks_ques_gen)}), limiting to 4")
-            chunks_ques_gen = chunks_ques_gen[:4]
+        # Very strict chunk limiting
+        if len(chunks_ques_gen) > 3:  # Reduced from 4 to 3
+            print(f"Too many chunks ({len(chunks_ques_gen)}), limiting to 3")
+            chunks_ques_gen = chunks_ques_gen[:3]
         
         document_ques_gen = [Document(page_content=t) for t in chunks_ques_gen]
         
         splitter_ans_gen = TokenTextSplitter(
             model_name='gpt-3.5-turbo',
-            chunk_size=400,  # Further reduced from 500 to 400
-            chunk_overlap=20  # Reduced overlap
+            chunk_size=300,  # Reduced from 400 to 300
+            chunk_overlap=15  # Reduced overlap
         )
         
         document_answer_gen = splitter_ans_gen.split_documents(document_ques_gen)
 
-        # Force garbage collection
-        gc.collect()
+        # Force cleanup
+        force_cleanup()
 
         return document_ques_gen, document_answer_gen
     except Exception as e:
@@ -84,12 +108,17 @@ def llm_pipeline(file_path):
         if not GROQ_API_KEY:
             raise Exception("GROQ_API_KEY is not configured. Please set a valid Groq API key in your environment variables.")
         
+        # Check memory before starting
+        if not check_memory():
+            raise Exception("Insufficient memory available for LLM processing")
+        
         document_ques_gen, document_answer_gen = file_processing(file_path)
         
-        # Initialize LLM for question generation
+        # Initialize LLM for question generation with memory optimization
         llm_ques_gen_pipeline = ChatGroq(
             temperature=0.3,
-            model_name="gemma2-9b-it"
+            model_name="gemma2-9b-it",
+            max_tokens=500  # Limit token usage
         )
 
         # Create prompts
@@ -103,11 +132,11 @@ def llm_pipeline(file_path):
             template=refine_template,
         )
 
-        # Generate questions
+        # Generate questions with memory monitoring
         ques_gen_chain = load_summarize_chain(
             llm=llm_ques_gen_pipeline,
             chain_type="refine",
-            verbose=True,
+            verbose=False,  # Reduce logging overhead
             question_prompt=PROMPT_QUESTIONS,
             refine_prompt=REFINE_PROMPT_QUESTIONS
         )
@@ -117,33 +146,54 @@ def llm_pipeline(file_path):
         if isinstance(ques, dict) and 'output_text' in ques:
             ques = ques['output_text']
         
-        # Initialize embeddings and vector store
+        # Force cleanup after question generation
+        force_cleanup()
+        
+        # Check memory before embeddings
+        if not check_memory():
+            raise Exception("Insufficient memory for embedding generation")
+        
+        # Initialize embeddings with memory optimization
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/paraphrase-MiniLM-L3-v2"
+            model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
         )
+        
+        # Create vector store with limited documents
+        if len(document_answer_gen) > 10:  # Limit vector store size
+            document_answer_gen = document_answer_gen[:10]
+        
         vector_store = FAISS.from_documents(document_answer_gen, embeddings)
         
-        # Initialize LLM for answer generation
-        llm_answer_gen = ChatGroq(temperature=0.1, model_name="gemma2-9b-it")
+        # Force cleanup after vector store creation
+        force_cleanup()
         
-        # Process questions
+        # Initialize LLM for answer generation
+        llm_answer_gen = ChatGroq(
+            temperature=0.1, 
+            model_name="gemma2-9b-it",
+            max_tokens=300  # Limit token usage
+        )
+        
+        # Process questions with strict limits
         ques_list = ques.split("\n")
         filtered_ques_list = [element for element in ques_list if element.endswith('?') or element.endswith('.')]
         
-        # Generate 8 questions for CSV (reduced from 10)
-        if len(filtered_ques_list) > 8:
-            print(f"Too many questions ({len(filtered_ques_list)}), limiting to 8")
-            filtered_ques_list = filtered_ques_list[:8]
+        # Very strict question limiting
+        if len(filtered_ques_list) > 5:  # Reduced from 8 to 5
+            print(f"Too many questions ({len(filtered_ques_list)}), limiting to 5")
+            filtered_ques_list = filtered_ques_list[:5]
         
         # Create answer generation chain
         answer_generation_chain = RetrievalQA.from_chain_type(
             llm=llm_answer_gen,
             chain_type="stuff",
-            retriever=vector_store.as_retriever()
+            retriever=vector_store.as_retriever(search_kwargs={"k": 2})  # Limit retrieved documents
         )
         
-        # Force garbage collection
-        gc.collect()
+        # Force cleanup
+        force_cleanup()
             
         return answer_generation_chain, filtered_ques_list
     except Exception as e:

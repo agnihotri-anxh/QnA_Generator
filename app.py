@@ -13,6 +13,7 @@ from pathlib import Path
 import logging
 from contextlib import asynccontextmanager
 import gc
+import psutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,7 +59,16 @@ async def favicon():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    try:
+        # Check memory status
+        memory = psutil.virtual_memory()
+        return {
+            "status": "healthy",
+            "memory_available_gb": round(memory.available / (1024**3), 2),
+            "memory_percent": memory.percent
+        }
+    except Exception as e:
+        return {"status": "warning", "error": str(e)}
 
 @app.post("/upload")
 async def upload_file(pdf_file: bytes = File(), filename: str = Form(...)):
@@ -96,7 +106,19 @@ def get_csv(file_path):
     try:
         logger.info(f"Starting analysis for file: {file_path}")
         
+        # Check memory before processing
+        try:
+            memory = psutil.virtual_memory()
+            available_gb = memory.available / (1024**3)
+            logger.info(f"Available memory before processing: {available_gb:.2f} GB")
+            
+            if available_gb < 0.5:  # Less than 500MB
+                raise Exception(f"Insufficient memory available: {available_gb:.2f} GB. Need at least 0.5 GB.")
+        except Exception as e:
+            logger.warning(f"Could not check memory: {e}")
+        
         # Force garbage collection before processing
+        gc.collect()
         gc.collect()
         
         answer_generation_chain, ques_list = llm_pipeline(file_path)
@@ -116,6 +138,19 @@ def get_csv(file_path):
             for i, question in enumerate(ques_list):
                 logger.info(f"Processing question {i+1}/{len(ques_list)}: {question[:50]}...")
                 try:
+                    # Check memory before each question
+                    if i > 0:  # Skip first question check
+                        try:
+                            memory = psutil.virtual_memory()
+                            available_gb = memory.available / (1024**3)
+                            if available_gb < 0.3:  # Less than 300MB
+                                logger.warning(f"Low memory during processing: {available_gb:.2f} GB")
+                                # Force cleanup
+                                gc.collect()
+                                gc.collect()
+                        except:
+                            pass
+                    
                     # Use invoke() instead of run() to fix deprecation warning
                     answer = answer_generation_chain.invoke({"query": question})
                     if isinstance(answer, dict) and 'result' in answer:
@@ -129,7 +164,8 @@ def get_csv(file_path):
                     logger.info(f"Question {i+1} processed successfully")
                     
                     # Force garbage collection after each question to manage memory
-                    if i % 3 == 0:  # Every 3 questions
+                    if i % 2 == 0:  # Every 2 questions (more frequent)
+                        gc.collect()
                         gc.collect()
                         
                 except Exception as e:
@@ -137,12 +173,13 @@ def get_csv(file_path):
                     all_qa_data.append({"question": question, "answer": f"Error generating answer: {str(e)}"})
                     csv_writer.writerow([question, f"Error generating answer: {str(e)}"])
         
-        # Return only first 5 questions for UI display
-        display_qa_data = all_qa_data[:5]
+        # Return only first 3 questions for UI display (reduced from 5)
+        display_qa_data = all_qa_data[:3]
         
         logger.info(f"Analysis completed. Generated {len(all_qa_data)} Q&A pairs for CSV, displaying {len(display_qa_data)} in UI")
         
         # Force garbage collection after processing
+        gc.collect()
         gc.collect()
         
         return str(output_file), display_qa_data
@@ -157,6 +194,21 @@ async def analyze_document(pdf_filename: str = Form(...)):
             raise HTTPException(status_code=404, detail="Uploaded file not found")
         
         logger.info(f"Starting document analysis: {pdf_filename}")
+        
+        # Check memory before starting analysis
+        try:
+            memory = psutil.virtual_memory()
+            available_gb = memory.available / (1024**3)
+            logger.info(f"Memory before analysis: {available_gb:.2f} GB available")
+            
+            if available_gb < 0.5:
+                raise HTTPException(
+                    status_code=503, 
+                    detail=f"Insufficient memory available ({available_gb:.2f} GB). Please try again later or use a smaller document."
+                )
+        except Exception as e:
+            logger.warning(f"Could not check memory: {e}")
+        
         output_file, qa_data = get_csv(pdf_filename)
         
         response_data = jsonable_encoder(json.dumps({
